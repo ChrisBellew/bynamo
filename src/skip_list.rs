@@ -121,7 +121,7 @@ impl SkipList {
             let current = current.borrow();
             start = current.below.clone();
         }
-        self.assert_valid();
+        //self.assert_valid();
     }
     pub fn find(&self, key: &str) -> Option<String> {
         match self.find_node(key) {
