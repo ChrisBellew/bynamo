@@ -4,8 +4,12 @@ use std::cmp::max;
 use std::fmt::Display;
 use std::fmt::{Formatter, Result};
 use std::{cell::RefCell, rc::Rc};
+use stopwatch::Stopwatch;
+
+use super::key_value::KeyValue;
 
 pub struct SkipList {
+    pub size: usize,
     head: Link<SkipListNode>,
 }
 
@@ -14,6 +18,7 @@ type Link<T> = Rc<RefCell<T>>;
 impl SkipList {
     pub fn new() -> SkipList {
         SkipList {
+            size: 0,
             head: Rc::new(RefCell::new(SkipListNode {
                 level: 0,
                 key: "".to_string(),
@@ -25,10 +30,10 @@ impl SkipList {
         }
     }
     pub fn insert(&mut self, key: String, value: String, highest_level: usize) {
-        println!("Inserting [{}:{}]", key, value);
+        log::trace!("Inserting [{}:{}]", key, value);
         // Ensure we have n+1 start nodes
         let new_levels = max(0, highest_level as i32 - self.head.borrow().level as i32);
-        println!("new_levels: {}", new_levels);
+        log::trace!("new_levels: {}", new_levels);
         for _ in 0..new_levels {
             let head = self.head.to_owned();
             let new_head = SkipListNode {
@@ -49,9 +54,10 @@ impl SkipList {
         let mut start = Some(Rc::clone(&self.head));
         while let Some(node) = start.clone() {
             let node = node.borrow();
-            println!(
+            log::trace!(
                 "startlevel: {}, highest_level: {}",
-                node.level, highest_level
+                node.level,
+                highest_level,
             );
             if node.level <= highest_level {
                 break;
@@ -62,13 +68,13 @@ impl SkipList {
         let mut added: Option<Rc<RefCell<SkipListNode>>> = None;
         while start.is_some() {
             let mut current = start;
-            println!("start: {}", current.as_ref().unwrap().borrow().level);
+            log::trace!("start: {}", current.as_ref().unwrap().borrow().level);
             // Navigate along the nodes at the level until we find
             // a None or or a node with a key greater than the key
             // we are adding
             while let Some(node) = current.clone() {
                 let node = node.borrow();
-                println!("node: {}:{}", node.level, node.key);
+                log::trace!("node: {}:{}", node.level, node.key);
                 match &node.next {
                     None => break,
                     Some(next) => {
@@ -86,7 +92,7 @@ impl SkipList {
 
             let current = current.expect("Missing node to insert after");
 
-            println!(
+            log::trace!(
                 "Adding before {} and after {}",
                 current
                     .borrow()
@@ -94,7 +100,7 @@ impl SkipList {
                     .clone()
                     .map(|next| next.borrow().key.clone())
                     .unwrap_or("None".to_string()),
-                current.borrow().key
+                current.borrow().key,
             );
 
             let new_node = SkipListNode {
@@ -121,6 +127,7 @@ impl SkipList {
             let current = current.borrow();
             start = current.below.clone();
         }
+        self.size += key.len() + value.len();
         //self.assert_valid();
     }
     pub fn find(&self, key: &str) -> Option<String> {
@@ -149,39 +156,39 @@ impl SkipList {
             let below = current.borrow().below.clone();
             if let Some(below) = below {
                 current = below.clone();
-                println!("Looking for {} on level {}", key, below.borrow().level);
+                log::trace!("Looking for {} on level {}", key, below.borrow().level);
                 continue;
             }
             break;
         }
         None
     }
-    pub fn delete(&self, key: &str) {
+    pub fn remove(&self, key: &str) {
         match self.find_node(key) {
             None => {}
             Some(node) => {
-                println!(
-                    "Found {} for delete on level {}",
+                log::trace!(
+                    "Found {} for remove on level {}",
                     node.borrow().key,
-                    node.borrow().level
+                    node.borrow().level,
                 );
                 let mut node = Some(node.clone());
-                while let Some(node_to_delete) = node {
-                    println!(
+                while let Some(node_to_remove) = node {
+                    log::trace!(
                         "Deleting node {} on level {}",
-                        node_to_delete.borrow().key,
-                        node_to_delete.borrow().level
+                        node_to_remove.borrow().key,
+                        node_to_remove.borrow().level,
                     );
-                    let previous = node_to_delete.borrow().previous.clone();
-                    let next = node_to_delete.borrow().next.clone();
-                    let below = node_to_delete.borrow().below.clone();
+                    let previous = node_to_remove.borrow().previous.clone();
+                    let next = node_to_remove.borrow().next.clone();
+                    let below = node_to_remove.borrow().below.clone();
                     if let Some(previous) = previous.clone() {
                         previous.as_ref().borrow_mut().next = next.clone();
                     }
                     if let Some(next) = next {
                         next.as_ref().borrow_mut().previous = previous;
                     }
-                    node_to_delete.as_ref().borrow_mut().below = None;
+                    node_to_remove.as_ref().borrow_mut().below = None;
                     node = below;
                 }
             }
@@ -236,6 +243,43 @@ impl SkipList {
                 continue;
             }
             break;
+        }
+    }
+
+    pub fn iter(&self) -> SkipListIterator {
+        let mut current = self.head.clone();
+        loop {
+            let below = current.borrow().below.clone();
+            if let Some(below) = below {
+                current = below;
+                continue;
+            }
+            break;
+        }
+
+        SkipListIterator { current }
+    }
+}
+
+pub struct SkipListIterator {
+    current: Rc<RefCell<SkipListNode>>,
+}
+
+impl Iterator for SkipListIterator {
+    type Item = KeyValue;
+
+    // next() is the only required method
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.current.borrow().next.clone();
+        match next {
+            None => None,
+            Some(next) => {
+                self.current = next.clone();
+                Some(KeyValue {
+                    key: self.current.borrow().key.clone(),
+                    value: self.current.borrow().value.clone(),
+                })
+            }
         }
     }
 }
@@ -310,7 +354,7 @@ mod tests {
 
     use rand::{Rng, SeedableRng};
 
-    use crate::skip_list::SkipList;
+    use super::super::skip_list::SkipList;
 
     use super::{coin_flip, coin_flip_with_rng};
 
@@ -417,38 +461,38 @@ mod tests {
     }
 
     #[test]
-    fn delete_single_key_on_one_level() {
+    fn remove_single_key_on_one_level() {
         let mut skip_list = SkipList::new();
         skip_list.insert("key1".to_string(), "value1".to_string(), 0);
-        skip_list.delete("key1");
+        skip_list.remove("key1");
         assert_eq!(skip_list.find("key1"), None);
         assert_structure(&skip_list, vec![vec![]]);
     }
 
     #[test]
-    fn delete_other_key_on_one_level() {
+    fn remove_other_key_on_one_level() {
         let mut skip_list = SkipList::new();
         skip_list.insert("key1".to_string(), "value1".to_string(), 0);
-        skip_list.delete("key2");
+        skip_list.remove("key2");
         assert_eq!(skip_list.find("key1"), Some("value1".to_string()));
         assert_structure(&skip_list, vec![vec!["key1".to_string()]]);
     }
 
     #[test]
-    fn delete_single_key_on_two_levels() {
+    fn remove_single_key_on_two_levels() {
         let mut skip_list = SkipList::new();
         skip_list.insert("key1".to_string(), "value1".to_string(), 1);
-        skip_list.delete("key1");
+        skip_list.remove("key1");
         assert_eq!(skip_list.find("key1"), None);
         assert_structure(&skip_list, vec![vec![]]);
     }
 
     #[test]
-    fn delete_first_key() {
+    fn remove_first_key() {
         let mut skip_list = SkipList::new();
         skip_list.insert("key1".to_string(), "value1".to_string(), 1);
         skip_list.insert("key2".to_string(), "value2".to_string(), 1);
-        skip_list.delete("key1");
+        skip_list.remove("key1");
         assert_eq!(skip_list.find("key1"), None);
         assert_eq!(skip_list.find("key2"), Some("value2".to_string()));
         assert_structure(
@@ -458,11 +502,11 @@ mod tests {
     }
 
     #[test]
-    fn delete_second_key() {
+    fn remove_second_key() {
         let mut skip_list = SkipList::new();
         skip_list.insert("key1".to_string(), "value1".to_string(), 1);
         skip_list.insert("key2".to_string(), "value2".to_string(), 1);
-        skip_list.delete("key2");
+        skip_list.remove("key2");
         assert_eq!(skip_list.find("key1"), Some("value1".to_string()));
         assert_eq!(skip_list.find("key2"), None);
         assert_structure(
@@ -479,28 +523,28 @@ mod tests {
 
          */
     #[test]
-    fn delete_scenario_1() {
+    fn remove_scenario_1() {
         let mut skip_list = SkipList::new();
         skip_list.insert("key53".to_string(), "value53".to_string(), 1);
-        println!("{}", skip_list);
+        log::trace!("{}", skip_list);
         skip_list.insert("key15".to_string(), "value15".to_string(), 0);
-        println!("{}", skip_list);
-        skip_list.delete("key15");
-        println!("{}", skip_list);
+        log::trace!("{}", skip_list);
+        skip_list.remove("key15");
+        log::trace!("{}", skip_list);
         assert_eq!(skip_list.find("key15"), None);
     }
 
     #[test]
     //#[ignore]
-    fn fuzz_add_and_delete() {
+    fn fuzz_add_and_remove() {
         let iterations = 1000;
         let num_keys = 10;
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
         for _ in 0..iterations {
-            println!("===========================");
+            log::trace!("===========================");
             let num = rng.gen_range(1..num_keys);
-            println!("Adding {} keys", num);
+            log::trace!("Adding {} keys", num);
             let mut keys = HashSet::<String>::new();
             let mut skip_list = SkipList::new();
             for _ in 0..num {
@@ -512,37 +556,26 @@ mod tests {
                         break (key, value);
                     }
                 };
-                println!("Inserting {}", key);
+                log::trace!("Inserting {}", key);
 
                 let highest_level = coin_flip_with_rng(&mut rng);
-                println!("{}", highest_level);
+                log::trace!("{}", highest_level);
                 skip_list.insert(key.clone(), value.clone(), highest_level);
-                //assert_structure(&skip_list, vec![vec![key.clone()]]);
 
-                println!("Finding {}", key);
+                log::trace!("Finding {}", key);
                 assert_eq!(skip_list.find(&key), Some(value));
-                println!("{}", skip_list);
+                log::trace!("{}", skip_list);
             }
-            // for i in 0..num {
-            //     println!("Finding {}", i);
-            //     assert_eq!(
-            //         skip_list.find(&format!("key{}", i)),
-            //         Some(format!("value{}", i))
-            //     );
-            // }
             for key in keys {
                 assert!(skip_list.find(&key).is_some());
 
-                println!("Deleting {}", key);
-                skip_list.delete(&key);
-                println!("{}", skip_list);
+                log::trace!("Deleting {}", key);
+                skip_list.remove(&key);
+                log::trace!("{}", skip_list);
 
-                println!("Ensuring deleted {}", key);
+                log::trace!("Ensuring removed {}", key);
                 assert_eq!(skip_list.find(&key), None);
             }
-            // for i in 0..num {
-            //     assert_eq!(skip_list.find(&format!("key{}", i)), None);
-            // }
         }
     }
 
@@ -560,11 +593,11 @@ mod tests {
                     if node.borrow().previous.clone().unwrap().borrow().key
                         != keys[node.borrow().level][index - 1]
                     {
-                        println!(
+                        log::trace!(
                             "{} previous: {} != {}",
                             node.borrow().key,
                             node.borrow().previous.clone().unwrap().borrow().key,
-                            keys[node.borrow().level][index - 1]
+                            keys[node.borrow().level][index - 1],
                         );
                         panic!("{}", skip_list);
                     }
@@ -573,11 +606,11 @@ mod tests {
                     if node.borrow().next.clone().unwrap().borrow().key
                         != keys[node.borrow().level][index + 1]
                     {
-                        println!(
+                        log::trace!(
                             "{} after: {} != {}",
                             node.borrow().key,
                             node.borrow().next.clone().unwrap().borrow().key,
-                            keys[node.borrow().level][index + 1]
+                            keys[node.borrow().level][index + 1],
                         );
                         panic!("{}", skip_list);
                     }
@@ -588,4 +621,29 @@ mod tests {
             start = node.below.clone();
         }
     }
+}
+
+pub fn bench_skip_list() -> Result {
+    for i in (10_000..=20_000).step_by(10_000) {
+        println!("Inserting {}", i);
+
+        let stopwatch = Stopwatch::start_new();
+        let mut skip_list = SkipList::new();
+        for item in 0..i {
+            skip_list.insert(
+                format!("key{}", item),
+                format!("value{}", item),
+                coin_flip(),
+            );
+        }
+        println!("Inserting {} took {}ms", i, stopwatch.elapsed_ms());
+
+        // let stopwatch = Stopwatch::start_new();
+        // let mut skip_map = SkipMap::new();
+        // for item in 0..i {
+        //     skip_map.insert(format!("key{}", item), format!("value{}", item));
+        // }
+        // println!("Inserting {} skip map took {}ms", i, stopwatch.elapsed_ms());
+    }
+    Ok(())
 }
