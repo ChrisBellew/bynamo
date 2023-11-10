@@ -6,44 +6,19 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix-rt = "2.9.0"
-actix-web = "4.4.0"
 anyhow = "1.0.75"
 async-channel = "2.0.0"
 async-trait = "0.1.74"
 byteorder = "1.5.0"
-crossbeam = "0.8.2"
 fasthash = "0.4.0"
 futures = "0.3.28"
-futures-timer = "3.0.2"
-image = "0.24.7"
-imageproc = "0.23.0"
 log = "0.4.20"
 log-derive = "0.4.1"
 rand = "0.8.5"
-random = "0.14.0"
-riteraft = "0.1.0"
-rusttype = "0.9.3"
-serde = { version = "1.0.189", features = ["derive"] }
-simple_logger = "4.2.0"
-skiplist = "0.5.1"
-slog = "2.7.0"
-slog-async = "2.8.0"
-slog-stdlog = "4.1.1"
-slog-term = "2.9.0"
 stopwatch = "0.0.7"
 thiserror = "1.0.50"
-tokio = "1.33.0"
-uuid = { version = "1.4.1", features = ["serde", "v4"] }
+tokio = { version = "1.33.0", features = ["full"] }
 
 [[bin]]
 name = "main"
 path = "src/main.rs"
-
-[[bin]]
-name = "consensus"
-path = "src/consensus.rs"
-
-[[bin]]
-name = "raft"
-path = "src/raft.rs"

@@ -1,12 +1,10 @@
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use log::logger;
 use std::{
     fs::{read_dir, File},
     io::{BufReader, BufWriter, Read, Write},
     path::PathBuf,
-    thread::sleep,
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 use stopwatch::Stopwatch;
 

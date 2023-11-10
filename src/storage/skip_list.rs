@@ -350,13 +350,14 @@ struct SkipListNode {
 }
 
 mod tests {
-    use std::{collections::HashSet, rc::Rc};
-
-    use rand::{Rng, SeedableRng};
-
+    #[allow(unused_imports)]
     use super::super::skip_list::SkipList;
-
-    use super::{coin_flip, coin_flip_with_rng};
+    #[allow(unused_imports)]
+    use crate::storage::skip_list::coin_flip_with_rng;
+    #[allow(unused_imports)]
+    use rand::{Rng, SeedableRng};
+    #[allow(unused_imports)]
+    use std::{collections::HashSet, rc::Rc};
 
     #[test]
     fn add_single_key_on_one_level() {

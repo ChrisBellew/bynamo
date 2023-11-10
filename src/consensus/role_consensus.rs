@@ -1,10 +1,12 @@
 use super::{
-    message::{HeartbeatMessage, Message, RequestVoteMessage, VoteMessage},
+    message::{
+        ConsensusReceiver, ConsensusSender, HeartbeatMessage, RequestVoteMessage,
+        RoleConsensusMessage, VoteMessage,
+    },
     role::Role,
     term::TermId,
 };
-use crate::{bynamo_node::NodeId, membership::client::MembershipClient};
-use crossbeam::channel::{Receiver, Sender};
+use crate::{bynamo_node::NodeId, membership::MembershipService, metadata::MetadataService};
 use rand::{thread_rng, Rng};
 use std::{
     collections::HashSet,
@@ -12,41 +14,46 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub struct RoleConsensus {
+pub struct RoleConsensus<S: ConsensusSender, R: ConsensusReceiver, Metadata: MetadataService> {
     role: Role,
     term: TermId,
     voted_for: Option<NodeId>,
     votes_received: HashSet<NodeId>,
-    membership_client: MembershipClient,
+    membership: MembershipService,
+    metadata: Metadata,
     id: NodeId,
     next_timeout: Instant,
     next_heartbeat: Instant,
-    sender: Sender<Message>,
-    receiver: Receiver<Message>,
+    sender: S,
+    receiver: R,
     will_revive_at: Option<Instant>,
     will_die_at: Option<Instant>,
 }
 
 const HEARTBEAT_MILLISECONDS: u64 = 1000;
-const ELECTION_TIMEOUT_MILLISECONDS: u64 = 5000;
+const ELECTION_TIMEOUT_MILLISECONDS: u64 = 3000;
 const MAX_ALIVE_DURATION_MILLISECONDS: u64 = 30_000;
 const MAX_DEAD_DURATION_MILLISECONDS: u64 = 10_000;
 const MIN_NETWORK_DELAY_MILLISECONDS: u64 = 20;
 const MAX_NETWORK_DELAY_MILLISECONDS: u64 = 50;
 
-impl RoleConsensus {
+impl<S: ConsensusSender, R: ConsensusReceiver, Metadata: MetadataService>
+    RoleConsensus<S, R, Metadata>
+{
     pub fn new(
         id: u32,
-        membership_client: MembershipClient,
-        sender: Sender<Message>,
-        receiver: Receiver<Message>,
+        membership_client: MembershipService,
+        metadata: Metadata,
+        sender: S,
+        receiver: R,
     ) -> Self {
         let mut node = RoleConsensus {
             role: Role::Follower,
             term: 0,
             voted_for: None,
             votes_received: HashSet::new(),
-            membership_client,
+            membership: membership_client,
+            metadata,
             id,
             next_timeout: Instant::now(),
             next_heartbeat: Instant::now(),
@@ -59,12 +66,15 @@ impl RoleConsensus {
         node
     }
 
+    pub fn role(&self) -> &Role {
+        &self.role
+    }
+
     fn set_next_timeout(&mut self) {
         self.next_timeout = Instant::now()
             + Duration::from_millis(thread_rng().gen_range(
                 ELECTION_TIMEOUT_MILLISECONDS
-                    ..self.membership_client.members().len() as u64 * 100
-                        + ELECTION_TIMEOUT_MILLISECONDS,
+                    ..self.membership.members().len() as u64 * 100 + ELECTION_TIMEOUT_MILLISECONDS,
             ));
     }
 
@@ -72,7 +82,7 @@ impl RoleConsensus {
         self.next_heartbeat = Instant::now() + Duration::from_millis(HEARTBEAT_MILLISECONDS);
     }
 
-    pub fn tick(&mut self) {
+    pub async fn tick(&mut self) {
         if let Some(will_revive_at) = self.will_revive_at {
             if Instant::now() > will_revive_at {
                 // Revive now, plan when to next die
@@ -103,20 +113,20 @@ impl RoleConsensus {
         }
 
         if Instant::now() > self.next_heartbeat && self.role == Role::Leader {
-            self.send_heartbeat();
+            self.send_heartbeat().await;
         }
 
         if Instant::now() > self.next_timeout && self.role != Role::Leader {
-            self.on_timeout();
+            self.on_timeout().await;
         }
 
-        match self.receiver.recv_timeout(Duration::from_millis(10)) {
-            Ok(message) => self.receive_message(message),
-            Err(_) => (),
+        match self.receiver.try_recv() {
+            Some(message) => self.receive_message(message).await,
+            None => (),
         }
     }
 
-    fn send_heartbeat(&mut self) {
+    async fn send_heartbeat(&mut self) {
         println!(
             "[{}]-{}: sending heartbeat, dieing in {}",
             self.id,
@@ -124,22 +134,22 @@ impl RoleConsensus {
             (self.will_die_at.unwrap() - Instant::now()).as_millis()
         );
 
-        for node_id in self.membership_client.members().iter() {
+        for node_id in self.membership.members().iter() {
             if *node_id != self.id {
                 self.sender
-                    .send(Message::Heartbeat(HeartbeatMessage {
+                    .try_send(RoleConsensusMessage::Heartbeat(HeartbeatMessage {
                         term: self.term,
                         sender: self.id,
                         receiver: *node_id,
                     }))
-                    .unwrap();
+                    .await;
             }
         }
 
         self.set_next_heartbeat();
     }
 
-    fn on_timeout(&mut self) {
+    async fn on_timeout(&mut self) {
         println!("[{}]-{}: heartbeat timed out", self.id, self.term);
 
         match self.role {
@@ -150,18 +160,28 @@ impl RoleConsensus {
                 self.votes_received.clear();
                 self.votes_received.insert(self.id);
                 self.set_next_timeout();
+                self.metadata.announce_new_term(self.term).await;
 
                 println!("[{}]-{}: proposed self as candidate", self.id, self.term);
 
-                for node_id in self.membership_client.members().iter() {
+                // println!(
+                //     "self.membership.members() {}",
+                //     self.membership.members().len()
+                // );
+
+                for node_id in self.membership.members().iter() {
+                    println!(
+                        "[{}]-{}: requesting vote from {}",
+                        self.id, self.term, node_id
+                    );
                     if *node_id != self.id {
                         self.sender
-                            .send(Message::RequestVote(RequestVoteMessage {
+                            .try_send(RoleConsensusMessage::RequestVote(RequestVoteMessage {
                                 term: self.term,
                                 requester: self.id,
                                 requestee: *node_id,
                             }))
-                            .unwrap();
+                            .await;
                     }
                 }
             }
@@ -178,37 +198,40 @@ impl RoleConsensus {
         self.set_next_timeout();
     }
 
-    fn vote_for(&mut self, votee: NodeId) {
+    async fn vote_for(&mut self, votee: NodeId) {
         if self.voted_for.is_some() {
             panic!("Tried to vote twice");
         }
+
+        self.set_next_timeout();
+
         println!("[{}]-{}: voting for {}", self.id, self.term, votee);
         self.voted_for = Some(votee);
         self.sender
-            .send(Message::Vote(VoteMessage {
+            .try_send(RoleConsensusMessage::Vote(VoteMessage {
                 term: self.term,
                 voter: self.id,
                 votee,
             }))
-            .unwrap();
-
-        self.set_next_timeout();
+            .await;
     }
 
-    fn receive_message(&mut self, message: Message) {
+    async fn receive_message(&mut self, message: RoleConsensusMessage) {
         // Simulate delay on network
         thread::sleep(Duration::from_millis(thread_rng().gen_range(
             MIN_NETWORK_DELAY_MILLISECONDS..MAX_NETWORK_DELAY_MILLISECONDS,
         )));
 
         match message {
-            Message::Vote(message) => self.receive_vote_message(message),
-            Message::Heartbeat(message) => self.receive_heartbeat_message(message),
-            Message::RequestVote(message) => self.receive_request_vote_message(message),
+            RoleConsensusMessage::Vote(message) => self.receive_vote_message(message).await,
+            RoleConsensusMessage::Heartbeat(message) => self.receive_heartbeat_message(message),
+            RoleConsensusMessage::RequestVote(message) => {
+                self.receive_request_vote_message(message).await
+            }
         }
     }
 
-    fn receive_vote_message(&mut self, message: VoteMessage) {
+    async fn receive_vote_message(&mut self, message: VoteMessage) {
         if message.term < self.term {
             println!(
                 "[{}]-{}: ignoring note from previous term from {}",
@@ -232,10 +255,11 @@ impl RoleConsensus {
                 "[{}]-{}: vote received from {}",
                 self.id, self.term, message.voter
             );
-            if self.votes_received.len() > self.membership_client.members().len() / 2 {
+            if self.votes_received.len() > self.membership.members().len() / 2 {
                 println!("[{}]-{}: ascending to leadership", self.id, self.term);
                 self.role = Role::Leader;
-                self.send_heartbeat();
+                self.send_heartbeat().await;
+                self.metadata.announce_leader(self.id, self.term).await;
             }
         }
     }
@@ -256,7 +280,7 @@ impl RoleConsensus {
         self.set_next_timeout();
     }
 
-    fn receive_request_vote_message(&mut self, message: RequestVoteMessage) {
+    async fn receive_request_vote_message(&mut self, message: RequestVoteMessage) {
         if message.term < self.term {
             println!(
                 "[{}]-{}: ignoring note from previous term from {}",
@@ -271,13 +295,13 @@ impl RoleConsensus {
                 self.id, self.term, message.term, message.requester
             );
             self.reset_term_as_follower(message.term);
-            self.vote_for(message.requester);
+            self.vote_for(message.requester).await;
             return;
         }
 
         match self.voted_for {
-            None => self.vote_for(message.requester),
-            Some(voted) if voted == message.requester => self.vote_for(message.requester),
+            None => self.vote_for(message.requester).await,
+            Some(voted) if voted == message.requester => self.vote_for(message.requester).await,
             _ => {}
         }
     }

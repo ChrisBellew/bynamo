@@ -1,9 +1,8 @@
 use anyhow::Result;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::{
+use std::path::PathBuf;
+use tokio::{
     fs::{File, OpenOptions},
-    io::{BufWriter, Seek, Write},
-    path::PathBuf,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufWriter},
 };
 
 pub struct WriteAheadLog {
@@ -12,28 +11,29 @@ pub struct WriteAheadLog {
 }
 
 impl WriteAheadLog {
-    pub fn create_or_open_for_append(log_path: PathBuf, index_path: PathBuf) -> Result<Self> {
+    pub async fn create_or_open_for_append(log_path: PathBuf, index_path: PathBuf) -> Result<Self> {
         let mut writer = BufWriter::new(
             OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(log_path.clone())?,
+                .open(log_path.clone())
+                .await?,
         );
-        let index = WriteAheadLogIndex::create_or_open(index_path)?;
-        writer.seek(std::io::SeekFrom::Start(index.offset))?;
+        let index = WriteAheadLogIndex::create_or_open(index_path).await?;
+        writer.seek(std::io::SeekFrom::Start(index.offset)).await?;
         println!("index: {:?}", &index);
         Ok(Self { writer, index })
     }
-    pub fn write_entry(&mut self, position: u64, key: &str, value: &str) -> Result<()> {
-        self.writer.write_u64::<LittleEndian>(position)?;
-        self.writer.write_u64::<LittleEndian>(key.len() as u64)?;
-        self.writer.write_all(key.as_bytes())?;
-        self.writer.write_u64::<LittleEndian>(value.len() as u64)?;
-        self.writer.write_all(value.as_bytes())?;
-        self.writer.flush()?;
+    pub async fn write_entry(&mut self, position: u64, key: &str, value: &str) -> Result<()> {
+        self.writer.write_u64_le(position).await?;
+        self.writer.write_u64_le(key.len() as u64).await?;
+        self.writer.write_all(key.as_bytes()).await?;
+        self.writer.write_u64_le(value.len() as u64).await?;
+        self.writer.write_all(value.as_bytes()).await?;
+        self.writer.flush().await?;
 
-        let offset = self.writer.seek(std::io::SeekFrom::Current(0))?;
-        self.index.update(position, offset)?;
+        let offset = self.writer.seek(std::io::SeekFrom::Current(0)).await?;
+        self.index.update(position, offset).await?;
         self.index.position = position;
 
         Ok(())
@@ -51,34 +51,34 @@ struct WriteAheadLogIndex {
 }
 
 impl WriteAheadLogIndex {
-    pub fn create_or_open(path: PathBuf) -> Result<Self> {
+    pub async fn create_or_open(path: PathBuf) -> Result<Self> {
         let (position, offset) = match path.exists() {
             true => {
-                let mut file = File::open(path.clone())?;
-                let position = file.read_u64::<LittleEndian>()?;
-                let offset = file.read_u64::<LittleEndian>()?;
+                let mut file = File::open(path.clone()).await?;
+                let position = file.read_u64_le().await?;
+                let offset = file.read_u64_le().await?;
                 (position, offset)
             }
             false => {
-                let mut file = File::create(path.clone())?;
-                file.write_u64::<LittleEndian>(0)?;
-                file.write_u64::<LittleEndian>(0)?;
+                let mut file = File::create(path.clone()).await?;
+                file.write_u64_le(0).await?;
+                file.write_u64_le(0).await?;
                 (0, 0)
             }
         };
-        let file = OpenOptions::new().write(true).open(path)?;
+        let file = OpenOptions::new().write(true).open(path).await?;
         Ok(Self {
             file,
             position,
             offset,
         })
     }
-    pub fn update(&mut self, position: u64, offset: u64) -> Result<()> {
+    pub async fn update(&mut self, position: u64, offset: u64) -> Result<()> {
         self.position = position;
         self.position = offset;
-        self.file.seek(std::io::SeekFrom::Start(0))?;
-        self.file.write_u64::<LittleEndian>(position)?;
-        self.file.write_u64::<LittleEndian>(offset)?;
+        self.file.seek(std::io::SeekFrom::Start(0)).await?;
+        self.file.write_u64_le(position).await?;
+        self.file.write_u64_le(offset).await?;
         Ok(())
     }
 }
