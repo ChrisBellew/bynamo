@@ -13,6 +13,7 @@
 // use std::path::PathBuf;
 
 pub type NodeId = u32;
+pub type MessageRecipient = NodeId;
 
 // pub struct BynamoNode<
 //     S: ConsensusSender,

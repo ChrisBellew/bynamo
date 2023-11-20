@@ -3,6 +3,8 @@ use std::{
     iter::from_fn,
 };
 
+pub type Position = u64;
+
 pub struct KeyValue {
     pub key: String,
     pub value: String,

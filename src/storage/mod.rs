@@ -1,8 +1,14 @@
+// pub mod client;
+pub mod commands;
 pub mod coordinator;
+pub mod handle_message;
 pub mod key_value;
 pub mod message;
+pub mod message_sender;
 pub mod network;
 pub mod receiver;
+pub mod replicate;
+pub mod replicator;
 pub mod sender;
 pub mod skip_list;
 pub mod ss_table;

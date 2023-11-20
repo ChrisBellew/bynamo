@@ -1,25 +1,25 @@
+use super::key_value::KeyValue;
 use rand::rngs::StdRng;
 use rand::Rng;
 use std::cmp::max;
 use std::fmt::Display;
 use std::fmt::{Formatter, Result};
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, RwLock};
 use stopwatch::Stopwatch;
 
-use super::key_value::KeyValue;
-
+#[derive(Clone)]
 pub struct SkipList {
     pub size: usize,
     head: Link<SkipListNode>,
 }
 
-type Link<T> = Rc<RefCell<T>>;
+type Link<T> = Arc<RwLock<T>>;
 
 impl SkipList {
     pub fn new() -> SkipList {
         SkipList {
             size: 0,
-            head: Rc::new(RefCell::new(SkipListNode {
+            head: Arc::new(RwLock::new(SkipListNode {
                 level: 0,
                 key: "".to_string(),
                 value: "".to_string(),
@@ -30,30 +30,32 @@ impl SkipList {
         }
     }
     pub fn insert(&mut self, key: String, value: String, highest_level: usize) {
+        let mut head = self.head.clone();
         log::trace!("Inserting [{}:{}]", key, value);
         // Ensure we have n+1 start nodes
-        let new_levels = max(0, highest_level as i32 - self.head.borrow().level as i32);
+        let new_levels = max(0, highest_level as i32 - head.read().unwrap().level as i32);
         log::trace!("new_levels: {}", new_levels);
         for _ in 0..new_levels {
-            let head = self.head.to_owned();
+            let previous_head = head.clone();
+            let previous_level = previous_head.read().unwrap().level;
             let new_head = SkipListNode {
-                level: self.head.borrow().level + 1,
+                level: previous_level + 1,
                 key: "".to_string(),
                 value: "".to_string(),
                 next: None,
                 previous: None,
-                below: Some(head),
+                below: Some(previous_head),
             };
-            self.head = Rc::new(RefCell::new(new_head));
+            head = Arc::new(RwLock::new(new_head));
         }
 
         // Start at head, the sentinel node on the top level.
         // Navigate down the sentinel nodes until we find the
         // sentinel node of the highest level we are intending
         // to add the node to.
-        let mut start = Some(Rc::clone(&self.head));
+        let mut start = Some(Arc::clone(&head));
         while let Some(node) = start.clone() {
-            let node = node.borrow();
+            let node = node.read().unwrap();
             log::trace!(
                 "startlevel: {}, highest_level: {}",
                 node.level,
@@ -65,24 +67,25 @@ impl SkipList {
             start = node.below.clone();
         }
 
-        let mut added: Option<Rc<RefCell<SkipListNode>>> = None;
+        let mut added: Option<Arc<RwLock<SkipListNode>>> = None;
         while start.is_some() {
             let mut current = start;
-            log::trace!("start: {}", current.as_ref().unwrap().borrow().level);
+            //log::trace!("start: {}", current.unwrap().read().unwrap().level);
             // Navigate along the nodes at the level until we find
             // a None or or a node with a key greater than the key
             // we are adding
             while let Some(node) = current.clone() {
-                let node = node.borrow();
+                let node = node.read().unwrap();
                 log::trace!("node: {}:{}", node.level, node.key);
                 match &node.next {
                     None => break,
                     Some(next) => {
-                        if next.borrow().key == key {
-                            next.as_ref().borrow_mut().value = value;
+                        let next_key = &next.read().unwrap().key;
+                        if *next_key == key {
+                            next.write().unwrap().value = value;
                             return;
                         }
-                        if next.borrow().key > key {
+                        if *next_key > key {
                             break;
                         }
                     }
@@ -95,55 +98,55 @@ impl SkipList {
             log::trace!(
                 "Adding before {} and after {}",
                 current
-                    .borrow()
+                    .read()
+                    .unwrap()
                     .next
                     .clone()
-                    .map(|next| next.borrow().key.clone())
+                    .map(|next| next.read().unwrap().key.clone())
                     .unwrap_or("None".to_string()),
-                current.borrow().key,
+                current.read().unwrap().key,
             );
 
             let new_node = SkipListNode {
-                level: current.borrow().level,
+                level: current.read().unwrap().level,
                 key: key.clone(),
                 value: value.clone(),
-                next: current.borrow().next.clone(),
+                next: current.read().unwrap().next.clone(),
                 previous: Some(current.clone()),
                 below: None,
             };
-            let added_node = Some(Rc::new(RefCell::new(new_node)));
-            if let Some(next) = current.borrow().next.clone() {
-                next.as_ref().borrow_mut().previous = added_node.clone();
+            let added_node = Some(Arc::new(RwLock::new(new_node)));
+            if let Some(next) = current.read().unwrap().next.clone() {
+                next.write().unwrap().previous = added_node.clone();
             }
 
             if let Some(node) = added {
-                node.as_ref().borrow_mut().below = added_node.clone();
+                node.write().unwrap().below = added_node.clone();
             }
 
             added = added_node.clone();
-            current.as_ref().borrow_mut().next = added_node;
+            current.write().unwrap().next = added_node;
 
             // Navigate down from the current node
-            let current = current.borrow();
+            let current = current.read().unwrap();
             start = current.below.clone();
         }
         self.size += key.len() + value.len();
         //self.assert_valid();
     }
     pub fn find(&self, key: &str) -> Option<String> {
+        let head = self.head.write().unwrap();
         match self.find_node(key) {
             None => None,
-            Some(node) => Some(node.borrow().value.clone()),
+            Some(node) => Some(node.read().unwrap().value.clone()),
         }
     }
-    fn find_node(&self, key: &str) -> Option<Rc<RefCell<SkipListNode>>> {
-        //let mut start = Rc::clone(&self.head);
-
-        let mut current = Rc::clone(&self.head);
+    fn find_node(&self, key: &str) -> Option<Arc<RwLock<SkipListNode>>> {
+        let mut current = Arc::clone(&self.head);
         loop {
-            let next = current.borrow().next.clone();
+            let next = current.read().unwrap().next.clone();
             if let Some(next) = next {
-                let next_key = &next.borrow().key;
+                let next_key = &next.read().unwrap().key;
                 if next_key == key {
                     return Some(next.clone());
                 }
@@ -153,10 +156,14 @@ impl SkipList {
                     continue;
                 }
             }
-            let below = current.borrow().below.clone();
+            let below = current.read().unwrap().below.clone();
             if let Some(below) = below {
                 current = below.clone();
-                log::trace!("Looking for {} on level {}", key, below.borrow().level);
+                log::trace!(
+                    "Looking for {} on level {}",
+                    key,
+                    below.read().unwrap().level
+                );
                 continue;
             }
             break;
@@ -169,40 +176,42 @@ impl SkipList {
             Some(node) => {
                 log::trace!(
                     "Found {} for remove on level {}",
-                    node.borrow().key,
-                    node.borrow().level,
+                    node.read().unwrap().key,
+                    node.read().unwrap().level,
                 );
                 let mut node = Some(node.clone());
                 while let Some(node_to_remove) = node {
                     log::trace!(
                         "Deleting node {} on level {}",
-                        node_to_remove.borrow().key,
-                        node_to_remove.borrow().level,
+                        node_to_remove.read().unwrap().key,
+                        node_to_remove.read().unwrap().level,
                     );
-                    let previous = node_to_remove.borrow().previous.clone();
-                    let next = node_to_remove.borrow().next.clone();
-                    let below = node_to_remove.borrow().below.clone();
+                    let previous = node_to_remove.read().unwrap().previous.clone();
+                    let next = node_to_remove.read().unwrap().next.clone();
+                    let below = node_to_remove.read().unwrap().below.clone();
                     if let Some(previous) = previous.clone() {
-                        previous.as_ref().borrow_mut().next = next.clone();
+                        previous.write().unwrap().next = next.clone();
                     }
                     if let Some(next) = next {
-                        next.as_ref().borrow_mut().previous = previous;
+                        next.write().unwrap().previous = previous;
                     }
-                    node_to_remove.as_ref().borrow_mut().below = None;
+                    node_to_remove.write().unwrap().below = None;
                     node = below;
                 }
             }
         }
     }
     pub fn count_nodes(&self) -> usize {
+        let head = self.head.read().unwrap();
+
         let mut count = 0;
-        let mut start = Some(Rc::clone(&self.head));
+        let mut start = Some(Arc::clone(&self.head));
         while let Some(node) = start.clone() {
-            let node = node.borrow();
+            let node = node.read().unwrap();
             let mut current = node.next.clone();
             while let Some(node) = current.clone() {
                 count += 1;
-                current = node.borrow().next.clone();
+                current = node.read().unwrap().next.clone();
             }
             start = node.below.clone();
         }
@@ -210,28 +219,45 @@ impl SkipList {
     }
 
     fn assert_valid(&self) {
+        let head = self.head.read().unwrap();
+
         // Traverse all levels and nodes, making sure the keys
         // existing in the correct positions, and the previous
         // and next links are correct.
-        let mut start = Rc::clone(&self.head);
+        let mut start = Arc::clone(&self.head);
         loop {
-            let level = start.borrow().level;
-            let below = start.borrow().below.clone();
+            let level = start.read().unwrap().level;
+            let below = start.read().unwrap().below.clone();
             let mut current = start.clone();
             loop {
-                assert_eq!(current.borrow().level, level);
-                let next = current.borrow().next.clone();
-                let previous = current.borrow().previous.clone();
+                assert_eq!(current.read().unwrap().level, level);
+                let next = current.read().unwrap().next.clone();
+                let previous = current.read().unwrap().previous.clone();
                 if let Some(previous) = previous.clone() {
                     assert_eq!(
-                        current.borrow().key,
-                        previous.borrow().next.as_ref().unwrap().borrow().key
+                        current.read().unwrap().key,
+                        previous
+                            .read()
+                            .unwrap()
+                            .next
+                            .as_ref()
+                            .unwrap()
+                            .read()
+                            .unwrap()
+                            .key
                     );
                 }
                 if let Some(next) = next.clone() {
                     assert_eq!(
-                        current.borrow().key,
-                        next.borrow().previous.as_ref().unwrap().borrow().key
+                        current.read().unwrap().key,
+                        next.read()
+                            .unwrap()
+                            .previous
+                            .as_ref()
+                            .unwrap()
+                            .read()
+                            .unwrap()
+                            .key
                     );
                     current = next;
                     continue;
@@ -249,7 +275,7 @@ impl SkipList {
     pub fn iter(&self) -> SkipListIterator {
         let mut current = self.head.clone();
         loop {
-            let below = current.borrow().below.clone();
+            let below = current.read().unwrap().below.clone();
             if let Some(below) = below {
                 current = below;
                 continue;
@@ -262,7 +288,7 @@ impl SkipList {
 }
 
 pub struct SkipListIterator {
-    current: Rc<RefCell<SkipListNode>>,
+    current: Arc<RwLock<SkipListNode>>,
 }
 
 impl Iterator for SkipListIterator {
@@ -270,14 +296,14 @@ impl Iterator for SkipListIterator {
 
     // next() is the only required method
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self.current.borrow().next.clone();
+        let next = self.current.read().unwrap().next.clone();
         match next {
             None => None,
             Some(next) => {
                 self.current = next.clone();
                 Some(KeyValue {
-                    key: self.current.borrow().key.clone(),
-                    value: self.current.borrow().value.clone(),
+                    key: self.current.read().unwrap().key.clone(),
+                    value: self.current.read().unwrap().value.clone(),
                 })
             }
         }
@@ -286,35 +312,35 @@ impl Iterator for SkipListIterator {
 
 impl Display for SkipList {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let mut start = Some(Rc::clone(&self.head));
+        let mut start = Some(Arc::clone(&self.head));
 
         while let Some(node) = start.clone() {
-            let node = node.borrow();
+            let node = node.read().unwrap();
 
             match node.next.clone() {
                 None => write!(f, "{}>:", node.level)?,
-                Some(next) => write!(f, "{}>{}:", node.level, next.borrow().key)?,
+                Some(next) => write!(f, "{}>{}:", node.level, next.read().unwrap().key)?,
             };
             let mut current = node.next.clone();
             while let Some(node) = current.clone() {
-                let previous = match node.borrow().previous.clone() {
+                let previous = match node.read().unwrap().previous.clone() {
                     None => "None".to_string(),
-                    Some(previous) => previous.borrow().key.clone(),
+                    Some(previous) => previous.read().unwrap().key.clone(),
                 };
-                let next = match node.borrow().next.clone() {
+                let next = match node.read().unwrap().next.clone() {
                     None => "None".to_string(),
-                    Some(next) => next.borrow().key.clone(),
+                    Some(next) => next.read().unwrap().key.clone(),
                 };
                 write!(
                     f,
                     "{}<[{}:{}:{}]>{}  ",
                     previous,
-                    node.borrow().level,
-                    node.borrow().key,
-                    node.borrow().value,
+                    node.read().unwrap().level,
+                    node.read().unwrap().key,
+                    node.read().unwrap().value,
                     next
                 )?;
-                current = node.borrow().next.clone();
+                current = node.read().unwrap().next.clone();
             }
             write!(f, "\n")?;
             start = node.below.clone();
@@ -581,42 +607,75 @@ mod tests {
     }
 
     fn assert_structure(skip_list: &SkipList, keys: Vec<Vec<String>>) {
-        let mut start = Some(Rc::clone(&skip_list.head));
+        let mut start = Some(skip_list.head.clone());
         while let Some(node) = start.clone() {
-            let node = node.borrow();
+            let node = node.read().unwrap();
             let level = node.level;
             let mut current = node.next.clone();
             let mut index = 0;
             while let Some(node) = current.clone() {
-                assert_eq!(node.borrow().key, keys[node.borrow().level][index]);
-                assert_eq!(node.borrow().level, level);
+                assert_eq!(
+                    node.read().unwrap().key,
+                    keys[node.read().unwrap().level][index]
+                );
+                assert_eq!(node.read().unwrap().level, level);
                 if index > 0 {
-                    if node.borrow().previous.clone().unwrap().borrow().key
-                        != keys[node.borrow().level][index - 1]
+                    if node
+                        .read()
+                        .unwrap()
+                        .previous
+                        .clone()
+                        .unwrap()
+                        .read()
+                        .unwrap()
+                        .key
+                        != keys[node.read().unwrap().level][index - 1]
                     {
                         log::trace!(
                             "{} previous: {} != {}",
-                            node.borrow().key,
-                            node.borrow().previous.clone().unwrap().borrow().key,
-                            keys[node.borrow().level][index - 1],
+                            node.read().unwrap().key,
+                            node.read()
+                                .unwrap()
+                                .previous
+                                .clone()
+                                .unwrap()
+                                .read()
+                                .unwrap()
+                                .key,
+                            keys[node.read().unwrap().level][index - 1],
                         );
                         panic!("{}", skip_list);
                     }
                 }
-                if index < keys[node.borrow().level].len() - 1 {
-                    if node.borrow().next.clone().unwrap().borrow().key
-                        != keys[node.borrow().level][index + 1]
+                if index < keys[node.read().unwrap().level].len() - 1 {
+                    if node
+                        .read()
+                        .unwrap()
+                        .next
+                        .clone()
+                        .unwrap()
+                        .read()
+                        .unwrap()
+                        .key
+                        != keys[node.read().unwrap().level][index + 1]
                     {
                         log::trace!(
                             "{} after: {} != {}",
-                            node.borrow().key,
-                            node.borrow().next.clone().unwrap().borrow().key,
-                            keys[node.borrow().level][index + 1],
+                            node.read().unwrap().key,
+                            node.read()
+                                .unwrap()
+                                .next
+                                .clone()
+                                .unwrap()
+                                .read()
+                                .unwrap()
+                                .key,
+                            keys[node.read().unwrap().level][index + 1],
                         );
                         panic!("{}", skip_list);
                     }
                 }
-                current = node.borrow().next.clone();
+                current = node.read().unwrap().next.clone();
                 index += 1;
             }
             start = node.below.clone();

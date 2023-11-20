@@ -1,19 +1,35 @@
+use crate::{bynamo_node::NodeId, consensus::term::TermId};
 use std::sync::Arc;
-
-use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::{bynamo_node::NodeId, consensus::term::TermId};
+#[derive(Clone)]
+pub enum RoleService {
+    Memory(MemoryRoleService),
+}
 
-#[async_trait]
-pub trait MetadataService {
-    async fn announce_new_term(&mut self, term: TermId);
-    async fn announce_leader(&mut self, leader: NodeId, term: TermId);
-    async fn leader(&self) -> Option<NodeId>;
+impl RoleService {
+    pub fn new_memory() -> Self {
+        Self::Memory(MemoryRoleService::new())
+    }
+    pub async fn announce_new_term(&mut self, term: TermId) {
+        match self {
+            RoleService::Memory(service) => service.announce_new_term(term).await,
+        }
+    }
+    pub async fn announce_leader(&mut self, leader: NodeId, term: TermId) {
+        match self {
+            RoleService::Memory(service) => service.announce_leader(leader, term).await,
+        }
+    }
+    pub async fn leader(&self) -> Option<NodeId> {
+        match self {
+            RoleService::Memory(service) => service.leader().await,
+        }
+    }
 }
 
 #[derive(Clone)]
-pub struct MemoryMetadataService {
+pub struct MemoryRoleService {
     state: Arc<RwLock<State>>,
 }
 
@@ -22,7 +38,7 @@ struct State {
     term: TermId,
 }
 
-impl MemoryMetadataService {
+impl MemoryRoleService {
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(State {
@@ -31,10 +47,6 @@ impl MemoryMetadataService {
             })),
         }
     }
-}
-
-#[async_trait]
-impl MetadataService for MemoryMetadataService {
     async fn announce_new_term(&mut self, term: TermId) {
         let mut state = self.state.write().await;
         if term > state.term {

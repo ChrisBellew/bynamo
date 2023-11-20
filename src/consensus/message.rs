@@ -1,53 +1,120 @@
-use super::term::TermId;
-use crate::bynamo_node::NodeId;
-use async_trait::async_trait;
-use std::fmt::Display;
-use thiserror::Error;
+//use crate::messaging::message::{message as inner, Message, MessageType};
 
-pub enum RoleConsensusMessage {
-    Vote(VoteMessage),
-    Heartbeat(HeartbeatMessage),
-    RequestVote(RequestVoteMessage),
-}
+// tonic::include_proto!("consensus");
 
-pub struct VoteMessage {
-    pub term: TermId,
-    pub voter: NodeId,
-    pub votee: NodeId,
-}
+use crate::messaging::{
+    node_message::Message, role_consensus_command, HeartbeatCommand, MessageType, NodeMessage,
+    RequestVoteCommand, RoleConsensusCommand, RoleConsensusMessage, VoteCommand,
+};
 
-pub struct HeartbeatMessage {
-    pub term: TermId,
-    pub sender: NodeId,
-    pub receiver: NodeId,
-}
-
-pub struct RequestVoteMessage {
-    pub term: TermId,
-    pub requester: NodeId,
-    pub requestee: NodeId,
-}
-
-#[async_trait]
-pub trait ConsensusSender {
-    async fn send(&self, message: RoleConsensusMessage) -> Result<(), MessageSendError>;
-    async fn try_send(&self, message: RoleConsensusMessage) -> bool;
-}
-
-#[async_trait]
-pub trait ConsensusReceiver {
-    async fn recv(&self) -> Result<RoleConsensusMessage, MessageRecvError>;
-    fn try_recv(&self) -> Option<RoleConsensusMessage>;
-}
-
-#[derive(Debug, Error)]
-pub struct MessageSendError {}
-
-impl Display for MessageSendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("MessageSendError")
+impl From<HeartbeatCommand> for NodeMessage {
+    fn from(command: HeartbeatCommand) -> Self {
+        NodeMessage {
+            r#type: MessageType::RoleConsensus.into(),
+            message: Some(Message::RoleConsensus(RoleConsensusMessage {
+                command: Some(RoleConsensusCommand {
+                    command: Some(role_consensus_command::Command::Heartbeat(command)),
+                }),
+            })),
+        }
     }
 }
 
-#[derive(Debug)]
-pub struct MessageRecvError {}
+impl From<RequestVoteCommand> for NodeMessage {
+    fn from(command: RequestVoteCommand) -> Self {
+        NodeMessage {
+            r#type: MessageType::RoleConsensus.into(),
+            message: Some(Message::RoleConsensus(RoleConsensusMessage {
+                command: Some(RoleConsensusCommand {
+                    command: Some(role_consensus_command::Command::RequestVote(command)),
+                }),
+            })),
+        }
+    }
+}
+
+impl From<VoteCommand> for NodeMessage {
+    fn from(command: VoteCommand) -> Self {
+        NodeMessage {
+            r#type: MessageType::RoleConsensus.into(),
+            message: Some(Message::RoleConsensus(RoleConsensusMessage {
+                command: Some(RoleConsensusCommand {
+                    command: Some(role_consensus_command::Command::Vote(command)),
+                }),
+            })),
+        }
+    }
+}
+
+// pub enum RoleConsensusMessage {
+//     Command(RoleConsensusCommand),
+// }
+
+// impl RoleConsensusMessage {
+//     pub fn message_id(&self) -> &String {
+//         match self {
+//             RoleConsensusMessage::Command(command) => command.message_id(),
+//         }
+//     }
+// }
+
+// pub enum RoleConsensusCommand {
+//     Vote(VoteCommand),
+//     Heartbeat(HeartbeatCommand),
+//     RequestVote(RequestVoteCommand),
+// }
+
+// impl RoleConsensusCommand {
+//     pub fn message_id(&self) -> &String {
+//         match self {
+//             RoleConsensusCommand::Vote(command) => &command.message_id,
+//             RoleConsensusCommand::Heartbeat(command) => &command.message_id,
+//             RoleConsensusCommand::RequestVote(command) => &command.message_id,
+//         }
+//     }
+// }
+
+// pub struct VoteCommand {
+//     pub message_id: String,
+//     pub term: TermId,
+//     pub voter: NodeId,
+//     pub votee: NodeId,
+// }
+
+// impl From<VoteCommand> for Message {
+//     fn from(command: VoteCommand) -> Self {
+//         Message::RoleConsensus(RoleConsensusMessage::Command(RoleConsensusCommand::Vote(
+//             command,
+//         )))
+//     }
+// }
+
+// pub struct HeartbeatCommand {
+//     pub message_id: String,
+//     pub term: TermId,
+//     pub sender: NodeId,
+//     pub receiver: NodeId,
+// }
+
+// impl From<HeartbeatCommand> for Message {
+//     fn from(command: HeartbeatCommand) -> Self {
+//         Message::RoleConsensus(RoleConsensusMessage::Command(
+//             RoleConsensusCommand::Heartbeat(command),
+//         ))
+//     }
+// }
+
+// pub struct RequestVoteCommand {
+//     pub message_id: String,
+//     pub term: TermId,
+//     pub requester: NodeId,
+//     pub requestee: NodeId,
+// }
+
+// impl From<RequestVoteCommand> for Message {
+//     fn from(command: RequestVoteCommand) -> Self {
+//         Message::RoleConsensus(RoleConsensusMessage::Command(
+//             RoleConsensusCommand::RequestVote(command),
+//         ))
+//     }
+// }

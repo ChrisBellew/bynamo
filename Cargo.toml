@@ -8,16 +8,24 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 async-channel = "2.0.0"
+async-recursion = "1.0.5"
 async-trait = "0.1.74"
 byteorder = "1.5.0"
+derive_more = "0.99.17"
 fasthash = "0.4.0"
 futures = "0.3.28"
+itertools = "0.11.0"
 log = "0.4.20"
 log-derive = "0.4.1"
+prost = "0.12.1"
 rand = "0.8.5"
 stopwatch = "0.0.7"
 thiserror = "1.0.50"
 tokio = { version = "1.33.0", features = ["full"] }
+tonic = "0.10.2"
+
+[build-dependencies]
+tonic-build = "0.10"
 
 [[bin]]
 name = "main"

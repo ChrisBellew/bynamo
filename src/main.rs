@@ -1,184 +1,113 @@
 mod bynamo_node;
 mod client;
 mod consensus;
-mod membership;
-mod metadata;
-mod replication;
+mod membership_service;
+mod messaging;
+mod role_service;
+mod start;
 mod storage;
 mod util;
 use anyhow::Result;
-use consensus::{network::DirectHubConsensusNetwork, role_consensus::RoleConsensus};
-use futures::executor::block_on;
-use membership::MembershipService;
-use metadata::{MemoryMetadataService, MetadataService};
-use replication::replicator::NetworkReplicator;
-use std::time::Instant;
-use storage::{
-    coordinator::StorageCoordinator,
-    message::{RequestWriteMessage, StorageMessage},
-    network::DirectHubStorageNetwork,
-};
-use tokio::task::yield_now;
+use messaging::{node_client::NodeClient, sender::MessageSender};
+use role_service::RoleService;
+use start::start_in_memory_node;
+use std::time::Duration;
+use tokio::time::Instant;
+
+use crate::messaging::WriteCommand;
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> Result<()> {
-    let local = tokio::task::LocalSet::new();
-    let mut consensus_network = DirectHubConsensusNetwork::new();
-    let mut storage_network = DirectHubStorageNetwork::new();
-    let membership = MembershipService::new();
-    let metadata = MemoryMetadataService::new();
+    let members: Vec<_> = (1..=3).into_iter().collect();
 
-    let nodes = (1..=3).map(|node_id| {
-        let metadata = metadata.clone();
-        let mut membership = membership.clone();
-        membership.add_member(node_id);
+    // let request_channels = members.iter().map(|_| bounded(100)).collect::<Vec<_>>();
+    // let response_channels = members.iter().map(|_| bounded(100)).collect::<Vec<_>>();
 
-        let (consensus_sender, consensus_receiver) = consensus_network.add_node(node_id);
-        let (storage_sender, storage_receiver) = storage_network.add_node(node_id);
+    // let (request_senders, request_receivers): (
+    //     Vec<Sender<RequestEnvelope>>,
+    //     Vec<Receiver<RequestEnvelope>>,
+    // ) = request_channels.into_iter().unzip();
+    // let (response_senders, response_receivers): (Vec<Sender<Response>>, Vec<Receiver<Response>>) =
+    //     response_channels.into_iter().unzip();
 
-        let replicator = NetworkReplicator::new(
-            node_id,
-            membership.clone(),
-            metadata.clone(),
-            storage_sender.clone(),
-        );
+    // let mut request_senders = request_senders
+    //     .into_iter()
+    //     .enumerate()
+    //     .map(|(i, sender)| ((i + 1) as u32, sender))
+    //     .collect::<HashMap<u32, Sender<RequestEnvelope>>>();
+    // let response_senders = response_senders
+    //     .into_iter()
+    //     .enumerate()
+    //     .map(|(i, sender)| ((i + 1) as u32, sender))
+    //     .collect::<HashMap<u32, Sender<Response>>>();
 
-        let write_ahead_log_path = format!("scratch/write_ahead_log_{}.bin", node_id).into();
-        let write_ahead_index_path = format!("scratch/write_ahead_index_{}.bin", node_id).into();
-        let mut storage = block_on(StorageCoordinator::create(
-            node_id,
-            write_ahead_log_path,
-            write_ahead_index_path,
-            replicator,
-            storage_receiver,
-            storage_sender,
-        ))
-        .unwrap();
+    let mut message_sender = MessageSender::new(
+        //message_clients,
+        //request_senders.clone(),
+        //response_receiver,
+    );
 
-        let handle = local.spawn_local(async move {
-            let mut consensus = RoleConsensus::new(
-                node_id,
-                membership,
-                metadata,
-                consensus_sender,
-                consensus_receiver,
-            );
+    // let mut message_senders = HashMap::new();
+    // for node_id in members.clone() {
+    //     let message_sender = MessageSender::new(node_id, message_clients.clone());
+    //     message_senders.insert(node_id, message_sender);
+    // }
 
-            loop {
-                consensus.tick().await;
-                yield_now().await;
-                storage.tick().await.unwrap();
-                yield_now().await;
-            }
-        });
+    let role_service = RoleService::new_memory();
 
-        (node_id, handle)
-    });
+    for node_id in members.clone()
+    // .zip(request_receivers.into_iter())
+    // .zip(response_receivers.into_iter())
+    {
+        let members = members.clone();
 
-    //let mut storages = HashMap::new();
-    let mut node_handles = Vec::new();
-    for node in nodes {
-        let (node_id, handle) = node;
-        //storages.insert(node_id, storage);
-        node_handles.push(handle);
+        //let message_sender = MessageSender::new(node_id, message_clients.clone());
+
+        let message_sender = message_sender.clone();
+        let role_service = role_service.clone();
+        //let response_senders = response_senders.clone();
+
+        //tokio::spawn(async move {
+        start_in_memory_node(node_id, members, role_service, message_sender)
+            .await
+            .unwrap()
+        //});
     }
 
-    let network_handle = local.spawn_local(async move {
-        let mut last_write = Instant::now();
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
-        loop {
-            let leader = metadata.leader().await;
-            match leader {
-                Some(leader) => {
-                    let now = Instant::now();
-                    let elapsed = now - last_write;
-                    if elapsed.as_secs() >= 1 {
-                        let key = format!("key-{}", rand::random::<u32>());
-                        let value = format!("value-{}", rand::random::<u32>());
-                        println!("Writing {} to {}", key, leader);
-                        storage_network
-                            .forward_message(StorageMessage::RequestWrite(RequestWriteMessage {
-                                writer: leader,
-                                requester: 0,
-                                request_id: "0".to_string(),
-                                key: key.clone(),
-                                value: value.clone(),
-                            }))
-                            .await;
-                        last_write = now;
-                    }
-                    //println!("Writing {} to {}", key, leader);
-                    // match storages.get_mut(&leader).unwrap().write(key, value).await {
-                    //     Ok(_) => {
-                    //         count += 1;
-                    //         let now = Instant::now();
-                    //         let elapsed = now - last_log;
-                    //         if elapsed.as_secs() >= 1 {
-                    //             // println!("{} writes per second", count);
-                    //             // count = 0;
-                    //             last_log = now;
-                    //         }
-                    //     }
-                    //     Err(err) => return Err(err),
-                    // }
-                }
-                None => {
-                    //println!("No leader");
-                }
+    //let mut message_clients = HashMap::new();
+    for node_id in members.clone() {
+        let addr = format!("http://localhost:{}", 50000 + node_id);
+        //let channel = Channel::from_shared(addr).unwrap();
+        let client = NodeClient::connect(addr).await.unwrap();
+        message_sender.add_client(node_id, client).await;
+        //message_clients.insert(node_id, client);
+    }
+
+    //let mut last_write = Instant::now();
+
+    loop {
+        let leader = role_service.leader().await;
+        match leader {
+            Some(leader) => {
+                // let now = Instant::now();
+                // let elapsed = now - last_write;
+                // if elapsed.as_secs() >= 1 {
+                let key = format!("key-{}", rand::random::<u32>());
+                let value = format!("value-{}", rand::random::<u32>());
+                println!("Writing {} to {}", key, leader);
+
+                message_sender
+                    .clone()
+                    .send_and_wait(leader, WriteCommand { key, value }.into())
+                    .await
+                    .unwrap();
+
+                //     last_write = now;
+                // }
             }
-
-            //println!("network tick");
-            consensus_network.tick().await;
-            yield_now().await;
-            storage_network.tick().await;
-            yield_now().await;
+            None => (),
         }
-    });
-
-    // let storage_handle = local.spawn_local(async move {
-    //     let mut count = 0;
-    //     let mut last_log = Instant::now();
-    //     loop {
-    //         let leader = metadata.leader().await;
-    //         match leader {
-    //             Some(leader) => {
-    //                 let key = format!("key-{}", rand::random::<u32>());
-    //                 let value = format!("value-{}", rand::random::<u32>());
-    //                 //println!("Writing {} to {}", key, leader);
-    //                 match storages.get_mut(&leader).unwrap().write(key, value).await {
-    //                     Ok(_) => {
-    //                         count += 1;
-    //                         let now = Instant::now();
-    //                         let elapsed = now - last_log;
-    //                         if elapsed.as_secs() >= 1 {
-    //                             println!("{} writes per second", count);
-    //                             count = 0;
-    //                             last_log = now;
-    //                         }
-    //                     }
-    //                     Err(err) => return Err(err),
-    //                 }
-    //             }
-    //             None => {
-    //                 //println!("No leader");
-    //             }
-    //         }
-    //         yield_now().await;
-
-    //         storage.tick
-
-    //         //sleep(Duration::from_millis(10)).await;
-    //     }
-    // });
-
-    local.await;
-
-    for handle in node_handles {
-        handle.await?;
     }
-
-    network_handle.await?;
-    //storage_handle.await??;
-
-    Ok(())
 }
