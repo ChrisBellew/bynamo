@@ -1,24 +1,41 @@
+use std::time::Instant;
+
 use super::super::super::{
     skip_list::{coin_flip, SkipList},
     write_ahead_log::WriteAheadLog,
 };
 use crate::{
     bynamo_node::NodeId,
-    messaging::WriteCommand,
     role_service::RoleService,
     storage::{
+        b_tree::{node_store::StringNodeSerializer, tree::BTree},
+        commands::commands::WriteCommand,
         replicator::{ReplicateError, StorageReplicator},
         write_ahead_log,
     },
 };
+use lazy_static::lazy_static;
+use prometheus::{
+    exponential_buckets, histogram_opts, register_histogram, Histogram, HistogramOpts, Registry,
+};
+
+// lazy_static! {
+//     static ref PUTS_HISTOGRAM: Histogram = register_histogram!(
+//         "putitem_histogram",
+//         "Item put durations in microseconds",
+//         exponential_buckets(20.0, 3.0, 15).unwrap()
+//     )
+//     .unwrap();
+// }
 
 #[derive(Clone)]
 pub struct WriteCommandHandler {
     node_id: NodeId,
     role_service: RoleService,
     write_ahead_log: WriteAheadLog,
-    skip_list: SkipList,
+    btree: BTree<String, String, StringNodeSerializer>,
     replicator: StorageReplicator,
+    puts_histogram: Histogram,
 }
 
 impl WriteCommandHandler {
@@ -26,44 +43,60 @@ impl WriteCommandHandler {
         node_id: NodeId,
         role_service: RoleService,
         write_ahead_log: WriteAheadLog,
-        skip_list: SkipList,
+        btree: BTree<String, String, StringNodeSerializer>,
         replicator: StorageReplicator,
+        registry: &Registry,
     ) -> Self {
+        let puts_histogram = Histogram::with_opts(
+            HistogramOpts::new("putitem_histogram", "Item put durations in microseconds")
+                .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+        )
+        .unwrap();
+        registry.register(Box::new(puts_histogram.clone())).unwrap();
+
         Self {
             node_id,
             role_service,
             write_ahead_log,
-            skip_list,
+            btree,
             replicator,
+            puts_histogram,
         }
     }
     pub async fn handle(&mut self, command: WriteCommand) -> Result<(), WriteError> {
+        let start = Instant::now();
         let WriteCommand { key, value } = command;
 
-        match self.role_service.leader().await {
-            Some(leader) => {
-                if leader != self.node_id {
-                    // We are not the leader
-                    return Err(WriteError::LeadershipError);
-                }
-            }
-            // There is currently no leader
-            None => return Err(WriteError::LeadershipError),
+        if self.btree.store.flush_buffer_full().await {
+            return Err(WriteError::BtreeWriteBufferFull());
         }
 
-        // Assign next position, treating WAL as the source of truth
-        let position = self.write_ahead_log.position().await + 1;
+        // // match self.role_service.leader().await {
+        // //     Some(leader) => {
+        // //         if leader != self.node_id {
+        // //             // We are not the leader
+        // //             return Err(WriteError::LeadershipError);
+        // //         }
+        // //     }
+        // //     // There is currently no leader
+        // //     None => return Err(WriteError::LeadershipError),
+        // // }
 
-        // Write to the WAL first so that we can recover if the node crashes
-        self.write_ahead_log.write(position, &key, &value).await?;
+        // // Assign next position, treating WAL as the source of truth
+        // //let position = self.write_ahead_log.next_position();
 
-        // Replicate the write to the followers
-        self.replicator
-            .replicate(position, key.clone(), value.clone(), self.node_id)
-            .await?;
+        // // Write to the WAL first so that we can recover if the node crashes
+        self.write_ahead_log.write_new(&key, &value).await?;
 
-        // Write to skip list
-        self.skip_list.insert(key, value, coin_flip());
+        self.btree.add(key, value).await;
+
+        // // Replicate the write to the followers
+        // self.replicator
+        //     .replicate(position, key.clone(), value.clone(), self.node_id)
+        //     .await?;
+
+        self.puts_histogram
+            .observe(start.elapsed().as_micros() as f64);
 
         Ok(())
     }
@@ -77,4 +110,6 @@ pub enum WriteError {
     WriteAheadLogError(#[from] write_ahead_log::WriteError),
     #[error("failed to replicate write")]
     ReplicateError(#[from] ReplicateError),
+    #[error("failed to write because btree buffer is full")]
+    BtreeWriteBufferFull(),
 }

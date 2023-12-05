@@ -1,47 +1,40 @@
-// use crate::{
-//     bynamo_node::NodeId,
-//     messaging::message::Message,
-//     storage::{key_value::Position, message::StorageMessage},
-// };
+use crate::{
+    bynamo_node::NodeId,
+    messaging::message::Message,
+    storage::{key_value::Position, message::StorageMessage},
+};
+use serde::{Deserialize, Serialize};
 
-// pub enum StorageCommand {
-//     Write(WriteCommand),
-//     WriteReplica(WriteReplicaCommand),
-// }
+#[derive(Deserialize, Serialize)]
+pub enum StorageCommand {
+    Write(WriteCommand),
+    WriteReplica(WriteReplicaCommand),
+}
 
-// impl StorageCommand {
-//     pub fn message_id(&self) -> &String {
-//         match self {
-//             StorageCommand::Write(command) => &command.message_id,
-//             StorageCommand::WriteReplica(command) => &command.message_id,
-//         }
-//     }
-// }
+#[derive(Deserialize, Serialize)]
+pub struct WriteCommand {
+    pub key: String,
+    pub value: String,
+}
 
-// pub struct WriteCommand {
-//     pub message_id: String,
-//     pub key: String,
-//     pub value: String,
-// }
+impl From<WriteCommand> for Message {
+    fn from(command: WriteCommand) -> Self {
+        Message::Storage(StorageMessage::Command(StorageCommand::Write(command)))
+    }
+}
 
-// impl From<WriteCommand> for Message {
-//     fn from(command: WriteCommand) -> Self {
-//         Message::Storage(StorageMessage::Command(StorageCommand::Write(command)))
-//     }
-// }
+#[derive(Deserialize, Serialize)]
+pub struct WriteReplicaCommand {
+    pub position: Position,
+    pub follower: NodeId,
+    pub key: String,
+    pub value: String,
+}
 
-// pub struct WriteReplicaCommand {
-//     pub message_id: String,
-//     pub position: Position,
-//     pub follower: NodeId,
-//     pub key: String,
-//     pub value: String,
-// }
-
-// impl From<WriteReplicaCommand> for Message {
-//     fn from(command: WriteReplicaCommand) -> Self {
-//         Message::Storage(StorageMessage::Command(StorageCommand::WriteReplica(
-//             command,
-//         )))
-//     }
-// }
+impl From<WriteReplicaCommand> for Message {
+    fn from(command: WriteReplicaCommand) -> Self {
+        Message::Storage(StorageMessage::Command(StorageCommand::WriteReplica(
+            command,
+        )))
+    }
+}

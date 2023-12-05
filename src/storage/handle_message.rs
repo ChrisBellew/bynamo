@@ -1,19 +1,18 @@
 use super::{
-    commands::handlers::{
-        write::{self, WriteCommandHandler},
-        write_replica::{self, WriteReplicaCommandHandler},
+    b_tree::{node_store::StringNodeSerializer, tree::BTree},
+    commands::{
+        commands::StorageCommand,
+        handlers::{
+            write::{self, WriteCommandHandler},
+            write_replica::{self, WriteReplicaCommandHandler},
+        },
     },
+    message::StorageMessage,
     replicator::StorageReplicator,
-    skip_list::SkipList,
     write_ahead_log::WriteAheadLog,
 };
-use crate::{
-    bynamo_node::NodeId,
-    messaging::{
-        storage_command::Command, storage_message::Message, StorageCommand, StorageMessage,
-    },
-    role_service::RoleService,
-};
+use crate::{bynamo_node::NodeId, role_service::RoleService};
+use prometheus::Registry;
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -27,39 +26,41 @@ impl StorageMessageHandler {
         node_id: NodeId,
         role_service: RoleService,
         write_ahead_log: WriteAheadLog,
-        skip_list: SkipList,
+        btree: BTree<String, String, StringNodeSerializer>,
         replicator: StorageReplicator,
+        registry: &Registry,
     ) -> Self {
         Self {
             write_command_handler: WriteCommandHandler::new(
                 node_id,
                 role_service,
                 write_ahead_log.clone(),
-                skip_list.clone(),
+                btree.clone(),
                 replicator,
+                registry,
             ),
             write_replica_command_handler: WriteReplicaCommandHandler::new(
                 node_id,
                 write_ahead_log,
-                skip_list,
+                btree,
             ),
         }
     }
     pub async fn handle(&mut self, message: StorageMessage) -> Result<(), StorageError> {
-        match message.message.unwrap() {
-            Message::Command(command) => {
+        match message {
+            StorageMessage::Command(command) => {
                 self.handle_command(command).await?;
             }
-            Message::Query(_) => {
+            StorageMessage::Query(_) => {
                 todo!();
             }
         };
         Ok(())
     }
     async fn handle_command(&mut self, command: StorageCommand) -> Result<(), StorageError> {
-        match command.command.unwrap() {
-            Command::Write(command) => self.write_command_handler.handle(command).await?,
-            Command::WriteReplica(command) => {
+        match command {
+            StorageCommand::Write(command) => self.write_command_handler.handle(command).await?,
+            StorageCommand::WriteReplica(command) => {
                 self.write_replica_command_handler.handle(command).await?;
             }
         };

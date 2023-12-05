@@ -7,6 +7,6 @@ pub mod receiver;
 pub mod sender;
 pub mod server;
 
-tonic::include_proto!("message");
+//tonic::include_proto!("message");
 
 pub type Recipient = NodeId;

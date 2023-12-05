@@ -1,13 +1,12 @@
+use super::message::{RoleConsensusCommand, RoleConsensusMessage};
 use super::{role::Role, term::TermId};
-use crate::messaging::role_consensus_command::Command;
+use crate::consensus::message::{HeartbeatCommand, RequestVoteCommand, VoteCommand};
 use crate::messaging::sender::MessageSender;
-use crate::messaging::{HeartbeatCommand, RequestVoteCommand, RoleConsensusMessage, VoteCommand};
 use crate::{bynamo_node::NodeId, role_service::RoleService};
 use rand::{thread_rng, Rng};
 use std::{
     collections::HashSet,
     sync::Arc,
-    thread,
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
@@ -105,34 +104,34 @@ impl Consensus {
     }
 
     pub async fn tick(&mut self) {
-        if let Some(will_revive_at) = self.will_revive_at {
-            if Instant::now() > will_revive_at {
-                // Revive now, plan when to next die
-                self.will_revive_at = None;
-                self.will_die_at = Some(
-                    Instant::now()
-                        + Duration::from_millis(
-                            thread_rng().gen_range(0..MAX_ALIVE_DURATION_MILLISECONDS),
-                        ),
-                );
-            } else {
-                return;
-            }
-        }
+        // if let Some(will_revive_at) = self.will_revive_at {
+        //     if Instant::now() > will_revive_at {
+        //         // Revive now, plan when to next die
+        //         self.will_revive_at = None;
+        //         self.will_die_at = Some(
+        //             Instant::now()
+        //                 + Duration::from_millis(
+        //                     thread_rng().gen_range(0..MAX_ALIVE_DURATION_MILLISECONDS),
+        //                 ),
+        //         );
+        //     } else {
+        //         return;
+        //     }
+        // }
 
-        if let Some(will_die_at) = self.will_die_at {
-            if Instant::now() > will_die_at {
-                // Die now, plan when to next revive
-                self.will_die_at = None;
-                self.will_revive_at = Some(
-                    Instant::now()
-                        + Duration::from_millis(
-                            thread_rng().gen_range(0..MAX_DEAD_DURATION_MILLISECONDS),
-                        ),
-                );
-                return;
-            }
-        }
+        // if let Some(will_die_at) = self.will_die_at {
+        //     if Instant::now() > will_die_at {
+        //         // Die now, plan when to next revive
+        //         self.will_die_at = None;
+        //         self.will_revive_at = Some(
+        //             Instant::now()
+        //                 + Duration::from_millis(
+        //                     thread_rng().gen_range(0..MAX_DEAD_DURATION_MILLISECONDS),
+        //                 ),
+        //         );
+        //         return;
+        //     }
+        // }
 
         if Instant::now() > self.next_heartbeat && self.role == Role::Leader {
             self.send_heartbeat().await;
@@ -144,12 +143,18 @@ impl Consensus {
     }
 
     async fn send_heartbeat(&mut self) {
+        // println!(
+        //     "{:7>0}: [{}]-{}: sending heartbeat, dieing in {}",
+        //     (Instant::now() - self.started).as_millis(),
+        //     self.id,
+        //     self.term,
+        //     (self.will_die_at.unwrap() - Instant::now()).as_millis()
+        // );
         println!(
-            "{:7>0}: [{}]-{}: sending heartbeat, dieing in {}",
+            "{:7>0}: [{}]-{}: sending heartbeat",
             (Instant::now() - self.started).as_millis(),
             self.id,
             self.term,
-            (self.will_die_at.unwrap() - Instant::now()).as_millis()
         );
 
         for node_id in self.members.iter() {
@@ -198,11 +203,6 @@ impl Consensus {
                     self.id,
                     self.term
                 );
-
-                // println!(
-                //     "(self.members)()) {}",
-                //     self.members.len()
-                // );
 
                 for node_id in self.members.iter() {
                     if *node_id != self.id {
@@ -269,21 +269,15 @@ impl Consensus {
         //     MIN_NETWORK_DELAY_MILLISECONDS..MAX_NETWORK_DELAY_MILLISECONDS,
         // )));
 
-        match message.command.unwrap().command.unwrap() {
-            Command::Vote(command) => self.receive_vote_command(command).await,
-            Command::Heartbeat(command) => self.receive_heartbeat_command(command),
-            Command::RequestVote(command) => self.receive_request_vote_command(command).await,
+        match message {
+            RoleConsensusMessage::Command(command) => match command {
+                RoleConsensusCommand::Vote(command) => self.receive_vote_command(command).await,
+                RoleConsensusCommand::Heartbeat(command) => self.receive_heartbeat_command(command),
+                RoleConsensusCommand::RequestVote(command) => {
+                    self.receive_request_vote_command(command).await
+                }
+            },
         }
-
-        // match message.command {
-        //     RoleConsensusMessage::Command(command) => match command {
-        //         RoleConsensusCommand::Vote(command) => self.receive_vote_command(command).await,
-        //         RoleConsensusCommand::Heartbeat(command) => self.receive_heartbeat_command(command),
-        //         RoleConsensusCommand::RequestVote(command) => {
-        //             self.receive_request_vote_command(command).await
-        //         }
-        //     },
-        // }
     }
 
     async fn receive_vote_command(&mut self, command: VoteCommand) {

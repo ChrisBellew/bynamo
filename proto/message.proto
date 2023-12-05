@@ -14,9 +14,36 @@ service Node {
 // }
 
 message NodeResponse {
-    // string message_id = 1;
-    // uint32 recipient = 2;
 }
+
+// message OkNodeResponse {
+//     // string message_id = 1;
+//     // uint32 recipient = 2;
+// }
+
+// message ErrNodeResponse {
+//     // string message_id = 1;
+//     // uint32 recipient = 2;
+//     StorageErrorType error_type = 1; // enum to indicate the type of error
+//     oneof details { // oneof ensures only one of these fields is set
+//         WriteErrorMessage write_error = 2;
+//         WriteReplicaErrorMessage write_replica_error = 3;
+//     }
+// }
+
+// enum StorageErrorType {
+//     UNKNOWN = 0; // default value, representing an undefined error
+//     WRITE_ERROR = 1;
+//     WRITE_REPLICA_ERROR = 2;
+// }
+
+// message WriteErrorMessage {
+//     string message = 1; // or any other relevant fields
+// }
+
+// message WriteReplicaErrorMessage {
+//     string message = 1; // or any other relevant fields
+// }
 
 enum MessageType {
     STORAGE = 0;

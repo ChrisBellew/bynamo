@@ -1,4 +1,5 @@
 // pub mod client;
+pub mod b_tree;
 pub mod commands;
 pub mod coordinator;
 pub mod handle_message;

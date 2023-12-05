@@ -3,7 +3,7 @@ use crate::{
     storage::handle_message::{StorageError, StorageMessageHandler},
 };
 
-use super::node_message::Message;
+use super::message::Message;
 
 #[derive(Clone)]
 pub struct MessageHandler {

@@ -43,6 +43,26 @@
 //     pub recipient: u32,
 // }
 
+use serde::{Deserialize, Serialize};
+
+use crate::{consensus::message::RoleConsensusMessage, storage::message::StorageMessage};
+
+#[derive(Deserialize, Serialize)]
+pub enum Message {
+    Storage(StorageMessage),
+    RoleConsensus(RoleConsensusMessage),
+}
+
+// #[derive(Deserialize, Serialize)]
+// enum Command {
+//     Put(String, String),
+// }
+
+#[derive(Deserialize, Serialize)]
+pub enum Reply {
+    Ok,
+}
+
 pub fn new_message_id() -> String {
     // Generate an 8 character random string
     let mut message_id = String::new();
