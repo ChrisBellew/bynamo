@@ -1,50 +1,5 @@
-// use crate::messaging::{
-//     node_message::Message, role_consensus_command, HeartbeatCommand, MessageType, NodeMessage,
-//     RequestVoteCommand, RoleConsensusCommand, RoleConsensusMessage, VoteCommand,
-// };
-
-// impl From<HeartbeatCommand> for NodeMessage {
-//     fn from(command: HeartbeatCommand) -> Self {
-//         NodeMessage {
-//             r#type: MessageType::RoleConsensus.into(),
-//             message: Some(Message::RoleConsensus(RoleConsensusMessage {
-//                 command: Some(RoleConsensusCommand {
-//                     command: Some(role_consensus_command::Command::Heartbeat(command)),
-//                 }),
-//             })),
-//         }
-//     }
-// }
-
-// impl From<RequestVoteCommand> for NodeMessage {
-//     fn from(command: RequestVoteCommand) -> Self {
-//         NodeMessage {
-//             r#type: MessageType::RoleConsensus.into(),
-//             message: Some(Message::RoleConsensus(RoleConsensusMessage {
-//                 command: Some(RoleConsensusCommand {
-//                     command: Some(role_consensus_command::Command::RequestVote(command)),
-//                 }),
-//             })),
-//         }
-//     }
-// }
-
-// impl From<VoteCommand> for NodeMessage {
-//     fn from(command: VoteCommand) -> Self {
-//         NodeMessage {
-//             r#type: MessageType::RoleConsensus.into(),
-//             message: Some(Message::RoleConsensus(RoleConsensusMessage {
-//                 command: Some(RoleConsensusCommand {
-//                     command: Some(role_consensus_command::Command::Vote(command)),
-//                 }),
-//             })),
-//         }
-//     }
-// }
-
-use serde::{Deserialize, Serialize};
-
 use crate::messaging::message::Message;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
 pub enum RoleConsensusMessage {
@@ -57,24 +12,6 @@ pub enum RoleConsensusCommand {
     RequestVote(RequestVoteCommand),
     Vote(VoteCommand),
 }
-
-// message VoteCommand {
-//     uint32 term = 1;
-//     uint32 voter = 2;
-//     uint32 votee = 3;
-// }
-
-// message HeartbeatCommand {
-//     uint32 term = 1;
-//     uint32 sender = 2;
-//     uint32 receiver = 3;
-// }
-
-// message RequestVoteCommand {
-//     uint32 term = 1;
-//     uint32 requester = 2;
-//     uint32 requestee = 3;
-// }
 
 #[derive(Deserialize, Serialize)]
 pub struct VoteCommand {

@@ -17,7 +17,6 @@ use crate::{
 use prometheus::Registry;
 use std::time::Duration;
 use tokio::task::yield_now;
-use tonic::transport::Server;
 
 pub async fn start_in_memory_node(
     node_id: NodeId,

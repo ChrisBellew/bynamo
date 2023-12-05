@@ -1,4 +1,5 @@
 use super::node::{BTreeNode, NodeId};
+use async_trait::async_trait;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
 use prometheus::{
@@ -17,7 +18,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter},
     sync::{Mutex, RwLock, RwLockWriteGuard},
 };
-use tonic::async_trait;
 
 #[derive(Clone)]
 pub enum NodeStore<K, V, S>

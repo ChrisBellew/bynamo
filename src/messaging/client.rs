@@ -1,7 +1,5 @@
+use quinn::{ClientConfig, Connection, Endpoint};
 use std::sync::Arc;
-
-use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
-use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 use super::message::Message;
@@ -23,16 +21,6 @@ impl MessageClient {
             .await
             .unwrap();
         println!("[client] connected: addr={}", connection.remote_address());
-
-        // let mut client = MessageClient::connect(address).await?; //"http://[::1]:50051"
-
-        // let request = tonic::Request::new(HelloRequest {
-        //     name: "Tonic".into(),
-        // });
-
-        // let response = client.say_hello(request).await?;
-
-        // StorageClient {}
 
         MessageClient {
             connection: Arc::new(connection),

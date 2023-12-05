@@ -1,12 +1,8 @@
 use super::handler::MessageHandler;
-use crate::{
-    messaging::message::{Message, Reply},
-    storage::handle_message::StorageError,
-};
+use crate::messaging::message::{Message, Reply};
 use quinn::{Endpoint, ServerConfig};
 use std::{error::Error, net::SocketAddr, sync::Arc};
-use tokio::{io::AsyncReadExt, sync::Mutex};
-use tonic::{Request, Response, Status};
+use tokio::io::AsyncReadExt;
 
 pub struct NodeService {
     //handler: Arc<Mutex<MessageHandler>>,
@@ -48,10 +44,6 @@ impl NodeService {
         });
 
         NodeService {}
-
-        // Self {
-        //     handler: Arc::new(Mutex::new(handler)),
-        // }
     }
 }
 
@@ -74,28 +66,3 @@ fn configure_server() -> Result<(ServerConfig, Vec<u8>), Box<dyn Error>> {
 
     Ok((server_config, cert_der))
 }
-
-// #[tonic::async_trait]
-// impl Node for NodeService {
-//     async fn send_message(
-//         &self,
-//         request: Request<NodeMessage>,
-//     ) -> Result<Response<NodeResponse>, Status> {
-//         //println!("Got a request: {:?}", request);
-
-//         let lock = self.handler.lock().await;
-//         let mut handler = lock.clone();
-//         drop(lock);
-
-//         //println!("Got lock");
-
-//         handler
-//             .handle(request.into_inner().message.unwrap())
-//             .await
-//             .map(|_| Response::new(NodeResponse {}))
-//             .map_err(|e| match e {
-//                 StorageError::WriteError(e) => Status::internal(e.to_string()),
-//                 StorageError::WriteReplicaError(e) => Status::internal(e.to_string()),
-//             })
-//     }
-// }
