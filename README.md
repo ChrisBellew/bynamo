@@ -1,4 +1,5 @@
-# Bynamo - An implementation of DynamoDB
+# Bynamo
+A hobby implementation of DynamoDB
 
 - Distributed key value storage
 - Raft consensus for leadership
