@@ -1,9 +1,7 @@
-# Bynamo - An implementation of the Dynamo whitepaper
+# Bynamo - An implementation of DynamoDB
 
-## Notes
-
-- Read committed
-
-## Possible optimisations
-
-- Interrupt sequential scan of SS tables on disk if a matching entry has been written to the LSM tree.
+- Distributed key value storage
+- Raft consensus for leadership
+- Write ahead log for durable storage
+- B tree index for read performance
+- QUIC for reliable and fast messaging
