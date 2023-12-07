@@ -56,7 +56,7 @@ pub async fn start_in_memory_node(
     let message_handler = MessageHandler::new(storage_message_handler, role_consensus.clone());
 
     let addr = format!("127.0.0.1:{}", 50000 + node_id);
-    let message_server = NodeService::start(&addr, message_handler.clone()).await;
+    let message_server = NodeService::start(&addr, message_handler.clone(), &registry).await;
 
     // tokio::spawn(async move {
     //     Server::builder()
@@ -86,7 +86,7 @@ async fn create_btree_index(
 
     let serializer = StringNodeSerializer::new();
     let flush_every = 1000;
-    let flush_buffer_max_size = 10_000;
+    let flush_buffer_max_size = 20000;
     let store: NodeStore<String, String, StringNodeSerializer> = NodeStore::new_disk(
         path,
         serializer,

@@ -71,22 +71,22 @@ impl WriteCommandHandler {
             return Err(WriteError::BtreeWriteBufferFull());
         }
 
-        // // match self.role_service.leader().await {
-        // //     Some(leader) => {
-        // //         if leader != self.node_id {
-        // //             // We are not the leader
-        // //             return Err(WriteError::LeadershipError);
-        // //         }
-        // //     }
-        // //     // There is currently no leader
-        // //     None => return Err(WriteError::LeadershipError),
-        // // }
+        // // // match self.role_service.leader().await {
+        // // //     Some(leader) => {
+        // // //         if leader != self.node_id {
+        // // //             // We are not the leader
+        // // //             return Err(WriteError::LeadershipError);
+        // // //         }
+        // // //     }
+        // // //     // There is currently no leader
+        // // //     None => return Err(WriteError::LeadershipError),
+        // // // }
 
-        // // Assign next position, treating WAL as the source of truth
-        // //let position = self.write_ahead_log.next_position();
+        // // // Assign next position, treating WAL as the source of truth
+        // // //let position = self.write_ahead_log.next_position();
 
-        // // Write to the WAL first so that we can recover if the node crashes
-        self.write_ahead_log.write_new(&key, &value).await?;
+        // // // Write to the WAL first so that we can recover if the node crashes
+        //self.write_ahead_log.write_new(&key, &value).await?;
 
         self.btree.add(key, value).await;
 

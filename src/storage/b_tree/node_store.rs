@@ -1,18 +1,24 @@
+use crate::util::delete_file_if_exists::delete_file_if_exists;
+
 use super::node::{BTreeNode, NodeId};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use lazy_static::lazy_static;
+use prometheus::core::Atomic;
 use prometheus::{
     exponential_buckets, register_histogram, register_int_gauge, Histogram, HistogramOpts,
-    IntGauge, Opts, Registry,
+    IntCounter, IntGauge, Opts, Registry,
 };
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::{
     fmt::{Debug, Display},
     io::SeekFrom,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter},
@@ -202,7 +208,7 @@ where
     fn clear_cache(&self) {}
 }
 
-const MAX_NODE_SIZE_BYTES: u32 = 512;
+const MAX_NODE_SIZE_BYTES: u32 = 1024;
 const NODE_INDEX_BYTES: u32 = MAX_NODE_SIZE_BYTES;
 
 pub static PAGE_LOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -223,16 +229,21 @@ where
 {
     reader: Arc<RwLock<File>>,
     writer: Arc<RwLock<File>>,
+    //persist_writer: Arc<RwLock<File>>,
     nodes: Arc<DashMap<NodeId, Arc<GuardedNode<K, V>>>>,
     serializer: S,
     key_size: usize,
     value_size: usize,
     flush_every: usize,
     flush_buffer_max_size: usize,
+    start: Instant,
+    last_flush: Arc<AtomicU64>,
     persist_node_ids: Arc<Mutex<HashSet<NodeId>>>, //node_buffer: Arc<RwLock<HashMap<NodeId, BTreeNode<K, V>>>>,
+    //persist_nodes: Arc<Mutex<Vec<BTreeNode<K, V>>>>,
     writes_histogram: Histogram,
     flush_size_histogram: Histogram,
     buffer_size_gauge: IntGauge,
+    seek_size_histogram: Histogram,
 }
 
 impl<K, V, S> DiskNodeStore<K, V, S>
@@ -257,6 +268,15 @@ where
             .open(path)
             .await
             .unwrap();
+
+        // delete_file_if_exists("scratch/persist");
+        // let persist_writer = OpenOptions::new()
+        //     .write(true)
+        //     .read(true)
+        //     .create(true)
+        //     .open("scratch/persist")
+        //     .await
+        //     .unwrap();
 
         let reader = OpenOptions::new().read(true).open(path).await.unwrap();
 
@@ -292,19 +312,35 @@ where
             .register(Box::new(flush_size_histogram.clone()))
             .unwrap();
 
+        let seek_size_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "node_store_seek_size_histogram",
+                "Node store seek size in bytes",
+            )
+            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(seek_size_histogram.clone()))
+            .unwrap();
+
         DiskNodeStore {
             reader: Arc::new(RwLock::new(reader)),
             writer: Arc::new(RwLock::new(writer)),
             nodes: Arc::new(DashMap::new()),
+            //persist_writer: Arc::new(RwLock::new(persist_writer)),
             serializer,
             key_size,
             value_size,
+            start: Instant::now(),
+            last_flush: Arc::new(AtomicU64::new(0)),
             flush_every,
             flush_buffer_max_size,
             persist_node_ids,
             writes_histogram,
             buffer_size_gauge,
             flush_size_histogram,
+            seek_size_histogram,
         }
     }
     async fn get(&self, node_id: NodeId) -> Option<Arc<RwLock<BTreeNode<K, V>>>> {
@@ -383,22 +419,76 @@ where
 
     async fn insert(&self, node: BTreeNode<K, V>) {
         let node_id = node.node_id;
-        self.nodes.insert(node_id, Arc::new(RwLock::new(node)));
-        self.persist_node_id(node_id).await;
+        self.nodes
+            .insert(node_id, Arc::new(RwLock::new(node.clone())));
+        self.persist_node_id(node_id, node).await;
     }
 
     async fn persist<'a>(&self, node: RwLockWriteGuard<'a, BTreeNode<K, V>>) {
         let node_id = node.node_id;
-        drop(node); // Ensure we release the lock before persisting
+        //drop(node); // Ensure we release the lock before persisting
 
-        self.persist_node_id(node_id).await;
+        self.persist_node_id(node_id, node.clone()).await;
     }
 
-    async fn persist_node_id<'a>(&self, node_id: NodeId) {
+    async fn persist_node_id<'a>(&self, node_id: NodeId, node: BTreeNode<K, V>) {
         let mut persist_node_ids_guard = self.persist_node_ids.lock().await;
         persist_node_ids_guard.insert(node_id);
+
         self.buffer_size_gauge
             .set(persist_node_ids_guard.len() as i64);
+        drop(persist_node_ids_guard);
+
+        // self.persist_writer
+        //     .write()
+        //     .await
+        //     .write_all(&bincode::serialize(&node).unwrap());
+        //self.persist_nodes.lock().await.push(node);
+
+        // TEMP
+        // let node_offset = (NODE_INDEX_BYTES + node.node_id * MAX_NODE_SIZE_BYTES) as u64;
+
+        // let mut buffer = Vec::new();
+
+        // // Write the node ID
+        // buffer.write_u32(node.node_id).await.unwrap();
+        // // Write the keys
+        // buffer.write_u16(node.keys.len() as u16).await.unwrap();
+        // for key in &node.keys {
+        //     let len = self.serializer.serialize_key(key, &mut buffer).await;
+        //     if len > self.key_size {
+        //         panic!("Key size {} is larger than key_size {}", len, self.key_size);
+        //     }
+        //     let buf = vec![0u8; self.key_size - len];
+        //     buffer.write_all(&buf).await.unwrap();
+        // }
+
+        // // Write the values
+        // buffer.write_u16(node.values.len() as u16).await.unwrap();
+        // for value in &node.values {
+        //     let len = self.serializer.serialize_value(value, &mut buffer).await;
+        //     if len > self.value_size {
+        //         panic!(
+        //             "Value size {} is larger than value_size {}",
+        //             len, self.value_size
+        //         );
+        //     }
+        //     let buf = vec![0u8; self.value_size - len];
+        //     buffer.write_all(&buf).await.unwrap();
+        // }
+
+        // // Write the children
+        // buffer.write_u16(node.children.len() as u16).await.unwrap();
+        // for child in &node.children {
+        //     buffer.write_u32(*child).await.unwrap();
+        // }
+
+        // let mut file = self.persist_writer.write().await;
+        // file.write_u64(node_offset).await.unwrap();
+        // file.write_u32(buffer.len() as u32).await.unwrap();
+        // file.write_all(&buffer).await.unwrap();
+        // file.flush().await.unwrap();
+        // TEMP
     }
 
     pub async fn flush(&self) {
@@ -407,6 +497,10 @@ where
 
         let persist_node_ids = std::mem::take(&mut *persist_node_ids_guard);
         drop(persist_node_ids_guard);
+
+        if persist_node_ids.is_empty() {
+            return;
+        }
 
         let mut persist_node_ids = persist_node_ids.into_iter().collect::<Vec<_>>();
         persist_node_ids.sort();
@@ -417,11 +511,15 @@ where
             .collect::<Vec<_>>();
 
         self.write_nodes(persist_nodes).await;
+        let elapsed = (Instant::now() - self.start).as_millis() as u64;
+        self.last_flush.store(elapsed, Ordering::Relaxed);
     }
 
     pub async fn flush_required(&self) -> bool {
         let persist_node_ids_guard = self.persist_node_ids.lock().await;
-        persist_node_ids_guard.len() >= self.flush_every
+        let elapsed = (Instant::now() - self.start).as_millis() as u64
+            - self.last_flush.load(Ordering::Relaxed);
+        persist_node_ids_guard.len() >= self.flush_every || elapsed > 5
     }
 
     async fn flush_buffer_size(&self) -> usize {
@@ -475,17 +573,20 @@ where
         // Seek to the node
         if *position != node_offset {
             writer.flush().await.unwrap();
+            writer.seek(SeekFrom::Start(node_offset)).await.unwrap();
+            self.seek_size_histogram
+                .observe(node_offset as f64 - *position as f64);
+            *position = node_offset;
         }
-        writer.seek(SeekFrom::Start(node_offset)).await.unwrap();
-        *position = node_offset;
 
         // Write the node ID
+        let mut size = 0;
         writer.write_u32(node.node_id).await.unwrap();
-        *position += 4;
+        size += 4;
 
         // Write the keys
         writer.write_u16(node.keys.len() as u16).await.unwrap();
-        *position += 2;
+        size += 2;
         for key in &node.keys {
             let len = serializer.serialize_key(key, writer).await;
             if len > key_size {
@@ -493,12 +594,12 @@ where
             }
             let buf = vec![0u8; key_size - len];
             writer.write_all(&buf).await.unwrap();
-            *position += key_size as u64;
+            size += key_size as u64;
         }
 
         // Write the values
         writer.write_u16(node.values.len() as u16).await.unwrap();
-        *position += 2;
+        size += 2;
         for value in &node.values {
             let len = serializer.serialize_value(value, writer).await;
             if len > value_size {
@@ -509,16 +610,22 @@ where
             }
             let buf = vec![0u8; value_size - len];
             writer.write_all(&buf).await.unwrap();
-            *position += value_size as u64;
+            size += value_size as u64;
         }
 
         // Write the children
         writer.write_u16(node.children.len() as u16).await.unwrap();
-        *position += 2;
+        size += 2;
         for child in &node.children {
             writer.write_u32(*child).await.unwrap();
-            *position += 4;
+            size += 4;
         }
+
+        *position += size;
+
+        let fill = vec![0u8; MAX_NODE_SIZE_BYTES as usize - size as usize];
+        writer.write_all(&fill).await.unwrap();
+        *position += fill.len() as u64;
 
         drop(node);
 
@@ -564,8 +671,12 @@ where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Send + Sync,
 {
-    async fn serialize_key(&self, node: &K, writer: &mut BufWriter<&mut File>) -> usize;
-    async fn serialize_value(&self, node: &V, writer: &mut BufWriter<&mut File>) -> usize;
+    async fn serialize_key<W: AsyncWrite + Unpin + Send>(&self, node: &K, writer: &mut W) -> usize;
+    async fn serialize_value<W: AsyncWrite + Unpin + Send>(
+        &self,
+        node: &V,
+        writer: &mut W,
+    ) -> usize;
 }
 
 #[async_trait]
@@ -574,8 +685,8 @@ where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Send + Sync,
 {
-    async fn deserialize_key(&self, reader: &mut BufReader<&mut File>) -> (K, usize);
-    async fn deserialize_value(&self, reader: &mut BufReader<&mut File>) -> (V, usize);
+    async fn deserialize_key<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (K, usize);
+    async fn deserialize_value<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (V, usize);
 }
 
 #[derive(Clone)]
@@ -589,14 +700,22 @@ impl StringNodeSerializer {
 
 #[async_trait]
 impl SerializeNode<String, String> for StringNodeSerializer {
-    async fn serialize_key(&self, key: &String, writer: &mut BufWriter<&mut File>) -> usize {
+    async fn serialize_key<W: AsyncWrite + Unpin + Send>(
+        &self,
+        key: &String,
+        writer: &mut W,
+    ) -> usize {
         let bytes = key.as_bytes();
         let len = bytes.len();
         writer.write_u32(len.try_into().unwrap()).await.unwrap();
         writer.write_all(bytes).await.unwrap();
         len + 4
     }
-    async fn serialize_value(&self, value: &String, writer: &mut BufWriter<&mut File>) -> usize {
+    async fn serialize_value<W: AsyncWrite + Unpin + Send>(
+        &self,
+        value: &String,
+        writer: &mut W,
+    ) -> usize {
         let bytes = value.as_bytes();
         let len = bytes.len();
         writer.write_u32(len.try_into().unwrap()).await.unwrap();
@@ -607,13 +726,19 @@ impl SerializeNode<String, String> for StringNodeSerializer {
 
 #[async_trait]
 impl DeserializeNode<String, String> for StringNodeSerializer {
-    async fn deserialize_key(&self, reader: &mut BufReader<&mut File>) -> (String, usize) {
+    async fn deserialize_key<R: AsyncRead + Unpin + Send>(
+        &self,
+        reader: &mut R,
+    ) -> (String, usize) {
         let len = reader.read_u32().await.unwrap() as usize;
         let mut buf = vec![0u8; len];
         reader.read_exact(&mut buf).await.unwrap();
         (String::from_utf8(buf).unwrap(), len + 4)
     }
-    async fn deserialize_value(&self, reader: &mut BufReader<&mut File>) -> (String, usize) {
+    async fn deserialize_value<R: AsyncRead + Unpin + Send>(
+        &self,
+        reader: &mut R,
+    ) -> (String, usize) {
         let len = reader.read_u32().await.unwrap() as usize;
         let mut buf = vec![0u8; len];
         reader.read_exact(&mut buf).await.unwrap();
@@ -632,11 +757,19 @@ impl I32NodeSerializer {
 
 #[async_trait]
 impl SerializeNode<i32, i32> for I32NodeSerializer {
-    async fn serialize_key(&self, key: &i32, writer: &mut BufWriter<&mut File>) -> usize {
+    async fn serialize_key<W: AsyncWrite + Unpin + Send>(
+        &self,
+        key: &i32,
+        writer: &mut W,
+    ) -> usize {
         writer.write_i32(*key).await.unwrap();
         4
     }
-    async fn serialize_value(&self, value: &i32, writer: &mut BufWriter<&mut File>) -> usize {
+    async fn serialize_value<W: AsyncWrite + Unpin + Send>(
+        &self,
+        value: &i32,
+        writer: &mut W,
+    ) -> usize {
         writer.write_i32(*value).await.unwrap();
         4
     }
@@ -644,10 +777,10 @@ impl SerializeNode<i32, i32> for I32NodeSerializer {
 
 #[async_trait]
 impl DeserializeNode<i32, i32> for I32NodeSerializer {
-    async fn deserialize_key(&self, reader: &mut BufReader<&mut File>) -> (i32, usize) {
+    async fn deserialize_key<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (i32, usize) {
         (reader.read_i32().await.unwrap(), 4)
     }
-    async fn deserialize_value(&self, reader: &mut BufReader<&mut File>) -> (i32, usize) {
+    async fn deserialize_value<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (i32, usize) {
         (reader.read_i32().await.unwrap(), 4)
     }
 }

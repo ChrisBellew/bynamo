@@ -1,20 +1,20 @@
 use super::{client::MessageClient, message::Message};
 use crate::bynamo_node::NodeId;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct MessageSender {
-    clients: Arc<Mutex<HashMap<NodeId, MessageClient>>>,
+    clients: Arc<RwLock<HashMap<NodeId, MessageClient>>>,
 }
 
 impl MessageSender {
     pub fn new() -> Self {
         Self {
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            clients: Arc::new(RwLock::new(HashMap::new())),
         }
     }
     pub async fn add_client(&mut self, node_id: NodeId, client: MessageClient) {
-        self.clients.lock().await.insert(node_id, client);
+        self.clients.write().await.insert(node_id, client);
         println!("added client for node {}", node_id);
     }
     pub async fn send_and_wait(
@@ -22,7 +22,7 @@ impl MessageSender {
         recipient: NodeId,
         message: Message,
     ) -> Result<(), SendError> {
-        let lock = self.clients.lock().await;
+        let lock = self.clients.read().await;
         let client = lock.get(&recipient).cloned();
         drop(lock);
 
@@ -30,7 +30,7 @@ impl MessageSender {
         Ok(())
     }
     pub async fn send_and_forget(&mut self, recipient: NodeId, message: Message) {
-        let lock = self.clients.lock().await;
+        let lock = self.clients.read().await;
         let client = lock.get(&recipient).cloned().unwrap();
         drop(lock);
 

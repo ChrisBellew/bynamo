@@ -25,6 +25,12 @@ where
     pub next_node_id: Arc<AtomicU32>,
     pub store: NodeStore<K, V, S>,
     pub adds_histogram: Histogram,
+    pub add_root_lock_wait_histogram: Histogram,
+    pub add_node_lock_wait_histogram: Histogram,
+    pub add_get_wait_histogram: Histogram,
+    pub add_persist_wait_histogram: Histogram,
+    pub add_insert_wait_histogram: Histogram,
+    pub add_remaining_histogram: Histogram,
 }
 
 impl<K, V, S> BTree<K, V, S>
@@ -48,14 +54,83 @@ where
             .await;
 
         let adds_histogram = Histogram::with_opts(
-            HistogramOpts::new(
-                "btree_adds_histogram",
-                "Btree add durations in microseconds",
-            )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            HistogramOpts::new("btree_adds_histogram", "Btree add durations in seconds")
+                .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
         )
         .unwrap();
         registry.register(Box::new(adds_histogram.clone())).unwrap();
+
+        let add_root_lock_wait_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "btree_add_root_lock_wait_histogram",
+                "Btree add root lock wait durations in seconds",
+            )
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_root_lock_wait_histogram.clone()))
+            .unwrap();
+
+        let add_node_lock_wait_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "btree_add_node_lock_wait_histogram",
+                "Btree add node lock wait durations in seconds",
+            )
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_node_lock_wait_histogram.clone()))
+            .unwrap();
+
+        let add_get_wait_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "btree_add_get_wait_histogram",
+                "Btree add get wait durations in seconds",
+            )
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_get_wait_histogram.clone()))
+            .unwrap();
+
+        let add_persist_wait_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "btree_add_persist_wait_histogram",
+                "Btree add persist wait durations in seconds",
+            )
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_persist_wait_histogram.clone()))
+            .unwrap();
+
+        let add_insert_wait_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "btree_add_insert_wait_histogram",
+                "Btree add insert wait durations in seconds",
+            )
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_insert_wait_histogram.clone()))
+            .unwrap();
+
+        let add_remaining_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "btree_add_remaining_histogram",
+                "Btree add remaining durations in seconds",
+            )
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 20).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_remaining_histogram.clone()))
+            .unwrap();
 
         BTree {
             root: Arc::new(RwLock::new(0)),
@@ -64,6 +139,12 @@ where
             next_node_id: Arc::new(1.into()),
             store,
             adds_histogram,
+            add_root_lock_wait_histogram,
+            add_node_lock_wait_histogram,
+            add_get_wait_histogram,
+            add_persist_wait_histogram,
+            add_insert_wait_histogram,
+            add_remaining_histogram,
         }
     }
     pub async fn add(&mut self, key: K, value: V) {

@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 pub type NodeId = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BTreeNode<K, V>
 where
     K: Clone,

@@ -1,7 +1,11 @@
 use super::handler::MessageHandler;
-use crate::messaging::message::{Message, Reply};
+use crate::{
+    messaging::message::{Message, Reply},
+    start,
+};
+use prometheus::{exponential_buckets, Histogram, HistogramOpts, Registry};
 use quinn::{Endpoint, ServerConfig};
-use std::{error::Error, net::SocketAddr, sync::Arc};
+use std::{error::Error, net::SocketAddr, sync::Arc, time::Instant};
 use tokio::io::AsyncReadExt;
 
 pub struct NodeService {
@@ -9,8 +13,21 @@ pub struct NodeService {
 }
 
 impl NodeService {
-    pub async fn start(address: &str, handler: MessageHandler) -> Self {
+    pub async fn start(address: &str, handler: MessageHandler, registry: &Registry) -> Self {
         let (endpoint, _server_cert) = make_server_endpoint(address.parse().unwrap()).unwrap();
+
+        let deserialize_histogram = Histogram::with_opts(
+            HistogramOpts::new(
+                "message_deserialize_histogram",
+                "Message deserialize duration in microseconds",
+            )
+            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(deserialize_histogram.clone()))
+            .unwrap();
+
         // accept a single connection
 
         tokio::spawn(async move {
@@ -18,6 +35,7 @@ impl NodeService {
                 let handler = handler.clone();
                 let incoming_conn = endpoint.accept().await.unwrap();
                 let conn = incoming_conn.await.unwrap();
+                let deserialize_histogram = deserialize_histogram.clone();
                 println!(
                     "[server] connection accepted: addr={}",
                     conn.remote_address()
@@ -26,12 +44,22 @@ impl NodeService {
                 tokio::spawn(async move {
                     loop {
                         let mut handler = handler.clone();
-                        let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+                        let deserialize_histogram = deserialize_histogram.clone();
+                        let (mut send, mut recv) = match conn.accept_bi().await {
+                            Ok(s) => s,
+                            Err(_) => {
+                                println!("[server] connection closed");
+                                return;
+                            }
+                        };
+                        let start = Instant::now();
                         tokio::spawn(async move {
                             let len = recv.read_u32().await.unwrap() as usize;
                             let mut buf = vec![0; len];
                             recv.read_exact(&mut buf).await.unwrap();
                             let message = bincode::deserialize::<Message>(&buf).unwrap();
+                            deserialize_histogram.observe(start.elapsed().as_micros() as f64);
+
                             handler.handle(message).await.unwrap();
 
                             let response = Reply::Ok;

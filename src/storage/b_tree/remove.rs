@@ -388,7 +388,13 @@ mod tests {
             root: Arc::new(RwLock::new(0)),
             store,
             next_node_id: Arc::new(size.into()),
-            adds_histogram,
+            adds_histogram: adds_histogram.clone(),
+            add_root_lock_wait_histogram: adds_histogram.clone(),
+            add_node_lock_wait_histogram: adds_histogram.clone(),
+            add_get_wait_histogram: adds_histogram.clone(),
+            add_persist_wait_histogram: adds_histogram.clone(),
+            add_insert_wait_histogram: adds_histogram.clone(),
+            add_remaining_histogram: adds_histogram.clone(),
         }
     }
 
