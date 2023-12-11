@@ -69,6 +69,8 @@ mod tests {
 
     use prometheus::Registry;
 
+    use crate::storage::b_tree::metrics::BTreeMetrics;
+
     use super::super::{
         node_store::{I32NodeSerializer, NodeStore},
         tree::BTree,
@@ -77,9 +79,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_first_in_root() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -96,9 +99,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_last_in_root() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -115,9 +119,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_first_in_first() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -134,9 +139,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_middle_in_first() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -153,9 +159,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_last_in_first() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -172,9 +179,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_first_in_middle() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -191,9 +199,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_last_in_middle() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -210,9 +219,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_in_last() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;
@@ -229,9 +239,10 @@ mod tests {
     #[tokio::test]
     async fn btree_find_missing_before_first() {
         let mut tree = BTree::new(
+            1,
             5,
             NodeStore::<i32, i32, I32NodeSerializer>::new_memory(),
-            &Registry::new(),
+            BTreeMetrics::register(1, &Registry::new()),
         )
         .await;
         tree.add(10, 10).await;

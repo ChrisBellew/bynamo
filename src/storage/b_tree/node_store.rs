@@ -1,5 +1,6 @@
 use crate::util::delete_file_if_exists::delete_file_if_exists;
 
+use super::metrics::BTreeMetrics;
 use super::node::{BTreeNode, NodeId};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -52,7 +53,7 @@ where
         value_size: usize,
         flush_every: usize,
         flush_buffer_max_size: usize,
-        registry: &Registry,
+        metrics: BTreeMetrics,
     ) -> Self {
         NodeStore::Disk(
             DiskNodeStore::open(
@@ -62,7 +63,7 @@ where
                 value_size,
                 flush_every,
                 flush_buffer_max_size,
-                registry,
+                metrics,
             )
             .await,
         )
@@ -103,12 +104,12 @@ where
         }
     }
 
-    pub async fn flush_required(&self) -> bool {
-        match self {
-            NodeStore::Memory(store) => store.flush_required(),
-            NodeStore::Disk(store) => store.flush_required().await,
-        }
-    }
+    // pub async fn flush_required(&self) -> bool {
+    //     match self {
+    //         NodeStore::Memory(store) => store.flush_required(),
+    //         NodeStore::Disk(store) => store.flush_required().await,
+    //     }
+    // }
 
     pub async fn flush_buffer_size(&self) -> usize {
         match self {
@@ -208,7 +209,7 @@ where
     fn clear_cache(&self) {}
 }
 
-const MAX_NODE_SIZE_BYTES: u32 = 1024;
+const MAX_NODE_SIZE_BYTES: u32 = 4096;
 const NODE_INDEX_BYTES: u32 = MAX_NODE_SIZE_BYTES;
 
 pub static PAGE_LOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -240,10 +241,7 @@ where
     last_flush: Arc<AtomicU64>,
     persist_node_ids: Arc<Mutex<HashSet<NodeId>>>, //node_buffer: Arc<RwLock<HashMap<NodeId, BTreeNode<K, V>>>>,
     //persist_nodes: Arc<Mutex<Vec<BTreeNode<K, V>>>>,
-    writes_histogram: Histogram,
-    flush_size_histogram: Histogram,
-    buffer_size_gauge: IntGauge,
-    seek_size_histogram: Histogram,
+    metrics: BTreeMetrics,
 }
 
 impl<K, V, S> DiskNodeStore<K, V, S>
@@ -259,7 +257,7 @@ where
         value_size: usize,
         flush_every: usize,
         flush_buffer_max_size: usize,
-        registry: &Registry,
+        metrics: BTreeMetrics,
     ) -> Self {
         let writer = OpenOptions::new()
             .write(true)
@@ -282,48 +280,6 @@ where
 
         let persist_node_ids = Arc::new(Mutex::new(HashSet::new()));
 
-        let writes_histogram = Histogram::with_opts(
-            HistogramOpts::new("store_writes_histogram", "Write durations in microseconds")
-                .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
-        )
-        .unwrap();
-        registry
-            .register(Box::new(writes_histogram.clone()))
-            .unwrap();
-
-        let buffer_size_gauge = IntGauge::with_opts(Opts::new(
-            "node_store_buffer_size",
-            "Size of node store write buffer in bytes",
-        ))
-        .unwrap();
-        registry
-            .register(Box::new(buffer_size_gauge.clone()))
-            .unwrap();
-
-        let flush_size_histogram = Histogram::with_opts(
-            HistogramOpts::new(
-                "node_store_flush_size_histogram",
-                "Node store flush size in bytes",
-            )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
-        )
-        .unwrap();
-        registry
-            .register(Box::new(flush_size_histogram.clone()))
-            .unwrap();
-
-        let seek_size_histogram = Histogram::with_opts(
-            HistogramOpts::new(
-                "node_store_seek_size_histogram",
-                "Node store seek size in bytes",
-            )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
-        )
-        .unwrap();
-        registry
-            .register(Box::new(seek_size_histogram.clone()))
-            .unwrap();
-
         DiskNodeStore {
             reader: Arc::new(RwLock::new(reader)),
             writer: Arc::new(RwLock::new(writer)),
@@ -337,10 +293,7 @@ where
             flush_every,
             flush_buffer_max_size,
             persist_node_ids,
-            writes_histogram,
-            buffer_size_gauge,
-            flush_size_histogram,
-            seek_size_histogram,
+            metrics,
         }
     }
     async fn get(&self, node_id: NodeId) -> Option<Arc<RwLock<BTreeNode<K, V>>>> {
@@ -435,7 +388,8 @@ where
         let mut persist_node_ids_guard = self.persist_node_ids.lock().await;
         persist_node_ids_guard.insert(node_id);
 
-        self.buffer_size_gauge
+        self.metrics
+            .buffer_size_gauge
             .set(persist_node_ids_guard.len() as i64);
         drop(persist_node_ids_guard);
 
@@ -499,28 +453,40 @@ where
         drop(persist_node_ids_guard);
 
         if persist_node_ids.is_empty() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
             return;
         }
 
+        let start = Instant::now();
         let mut persist_node_ids = persist_node_ids.into_iter().collect::<Vec<_>>();
         persist_node_ids.sort();
+        self.metrics
+            .flush_sort_duration_histogram
+            .observe(start.elapsed().as_secs_f64());
 
+        let start_get = Instant::now();
         let persist_nodes = persist_node_ids
             .iter()
             .filter_map(|node_id| self.nodes.get(node_id).map(|node| node.value().clone()))
             .collect::<Vec<_>>();
+        self.metrics
+            .flush_get_duration_histogram
+            .observe(start_get.elapsed().as_secs_f64());
 
         self.write_nodes(persist_nodes).await;
         let elapsed = (Instant::now() - self.start).as_millis() as u64;
         self.last_flush.store(elapsed, Ordering::Relaxed);
+        self.metrics
+            .flush_duration_histogram
+            .observe(start.elapsed().as_secs_f64());
     }
 
-    pub async fn flush_required(&self) -> bool {
-        let persist_node_ids_guard = self.persist_node_ids.lock().await;
-        let elapsed = (Instant::now() - self.start).as_millis() as u64
-            - self.last_flush.load(Ordering::Relaxed);
-        persist_node_ids_guard.len() >= self.flush_every || elapsed > 5
-    }
+    // pub async fn flush_required(&self) -> bool {
+    //     let persist_node_ids_guard = self.persist_node_ids.lock().await;
+    //     let elapsed = (Instant::now() - self.start).as_millis() as u64
+    //         - self.last_flush.load(Ordering::Relaxed);
+    //     persist_node_ids_guard.len() >= self.flush_every || elapsed > 5
+    // }
 
     async fn flush_buffer_size(&self) -> usize {
         let persist_node_ids_guard = self.persist_node_ids.lock().await;
@@ -552,7 +518,8 @@ where
         }
 
         writer.flush().await.unwrap();
-        self.flush_size_histogram
+        self.metrics
+            .flush_size_histogram
             .observe((position - start_position) as f64);
     }
 
@@ -574,7 +541,8 @@ where
         if *position != node_offset {
             writer.flush().await.unwrap();
             writer.seek(SeekFrom::Start(node_offset)).await.unwrap();
-            self.seek_size_histogram
+            self.metrics
+                .seek_size_histogram
                 .observe(node_offset as f64 - *position as f64);
             *position = node_offset;
         }
@@ -623,15 +591,16 @@ where
 
         *position += size;
 
-        let fill = vec![0u8; MAX_NODE_SIZE_BYTES as usize - size as usize];
-        writer.write_all(&fill).await.unwrap();
-        *position += fill.len() as u64;
+        // let fill = vec![0u8; MAX_NODE_SIZE_BYTES as usize - size as usize];
+        // writer.write_all(&fill).await.unwrap();
+        // *position += fill.len() as u64;
 
         drop(node);
 
-        let duration_micros = (Instant::now() - start).as_micros() as usize;
         //println!("Write node in {} microseconds", duration_micros);
-        self.writes_histogram.observe(duration_micros as f64);
+        self.metrics
+            .writes_histogram
+            .observe(start.elapsed().as_secs_f64());
     }
 
     async fn remove<'a>(&self, node: RwLockWriteGuard<'a, BTreeNode<K, V>>) {

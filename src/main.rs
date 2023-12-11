@@ -31,8 +31,8 @@ use crate::messaging::client::MessageClient;
 lazy_static! {
     static ref PUTS_RTT_HISTOGRAM: Histogram = register_histogram!(
         "putitem_round_trip_histogram",
-        "Item put round trip durations in microseconds",
-        exponential_buckets(20.0, 3.0, 15).unwrap()
+        "Item put round trip durations in seconds",
+        exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()
     )
     .unwrap();
 }
@@ -74,9 +74,9 @@ pub async fn main() -> Result<()> {
     let stream_open_histogram = Histogram::with_opts(
         HistogramOpts::new(
             "stream_open_histogram",
-            "QUIC stream open durations in microseconds",
+            "QUIC stream open durations in seconds",
         )
-        .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+        .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
     )
     .unwrap();
     prometheus::default_registry()
@@ -86,9 +86,9 @@ pub async fn main() -> Result<()> {
     let stream_ttfb_histogram = Histogram::with_opts(
         HistogramOpts::new(
             "stream_ttfb_histogram",
-            "QUIC stream time to first byte durations in microseconds",
+            "QUIC stream time to first byte durations in seconds",
         )
-        .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+        .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
     )
     .unwrap();
     prometheus::default_registry()
@@ -167,9 +167,7 @@ async fn start_load_worker(
                         }
                     }
 
-                    let duration = start.elapsed();
-                    let duration_micros = duration.as_micros();
-                    PUTS_RTT_HISTOGRAM.observe(duration_micros as f64);
+                    PUTS_RTT_HISTOGRAM.observe(start.elapsed().as_secs_f64());
                     tokio::time::sleep(Duration::from_millis(backoff_millis)).await;
                     backoff_millis *= 2;
                 }

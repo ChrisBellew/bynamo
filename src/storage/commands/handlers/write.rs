@@ -19,15 +19,6 @@ use prometheus::{
     exponential_buckets, histogram_opts, register_histogram, Histogram, HistogramOpts, Registry,
 };
 
-// lazy_static! {
-//     static ref PUTS_HISTOGRAM: Histogram = register_histogram!(
-//         "putitem_histogram",
-//         "Item put durations in microseconds",
-//         exponential_buckets(20.0, 3.0, 15).unwrap()
-//     )
-//     .unwrap();
-// }
-
 #[derive(Clone)]
 pub struct WriteCommandHandler {
     node_id: NodeId,
@@ -48,8 +39,8 @@ impl WriteCommandHandler {
         registry: &Registry,
     ) -> Self {
         let puts_histogram = Histogram::with_opts(
-            HistogramOpts::new("putitem_histogram", "Item put durations in microseconds")
-                .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            HistogramOpts::new("putitem_histogram", "Item put durations in seconds")
+                .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
         )
         .unwrap();
         registry.register(Box::new(puts_histogram.clone())).unwrap();
@@ -95,8 +86,7 @@ impl WriteCommandHandler {
         //     .replicate(position, key.clone(), value.clone(), self.node_id)
         //     .await?;
 
-        self.puts_histogram
-            .observe(start.elapsed().as_micros() as f64);
+        self.puts_histogram.observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }

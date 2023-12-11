@@ -5,15 +5,6 @@ use crate::{bynamo_node::NodeId, messaging::sender::MessageSender};
 // use lazy_static::lazy_static;
 // use prometheus::{exponential_buckets, register_histogram, Histogram};
 
-// lazy_static! {
-//     static ref REPLICATOR_WRITES_HISTOGRAM: Histogram = register_histogram!(
-//         "replicator_writes_histogram",
-//         "Replication durations in microseconds",
-//         exponential_buckets(20.0, 3.0, 15).unwrap()
-//     )
-//     .unwrap();
-// }
-
 #[derive(Clone)]
 pub struct StorageReplicator {
     message_sender: MessageSender,
@@ -52,8 +43,6 @@ impl StorageReplicator {
             )
             .await
             .unwrap();
-
-        //REPLICATOR_WRITES_HISTOGRAM.observe(start.elapsed().as_micros() as f64);
 
         // self.message_sender
         //     .send_and_wait(

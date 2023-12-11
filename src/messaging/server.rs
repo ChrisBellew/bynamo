@@ -19,9 +19,9 @@ impl NodeService {
         let deserialize_histogram = Histogram::with_opts(
             HistogramOpts::new(
                 "message_deserialize_histogram",
-                "Message deserialize duration in microseconds",
+                "Message deserialize duration in seconds",
             )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
         )
         .unwrap();
         registry
@@ -58,7 +58,7 @@ impl NodeService {
                             let mut buf = vec![0; len];
                             recv.read_exact(&mut buf).await.unwrap();
                             let message = bincode::deserialize::<Message>(&buf).unwrap();
-                            deserialize_histogram.observe(start.elapsed().as_micros() as f64);
+                            deserialize_histogram.observe(start.elapsed().as_secs_f64());
 
                             handler.handle(message).await.unwrap();
 

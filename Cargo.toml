@@ -19,13 +19,14 @@ prometheus = { version = "0.13.3", features = ["push"] }
 rand = "0.8.5"
 stopwatch = "0.0.7"
 thiserror = "1.0.50"
-tokio = { version = "1.33.0", features = ["full"] }
+tokio = { version = "1.33.0", features = ["full", "tracing"] }
 quinn = "*"
 rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
 rcgen = "0.11.3"
 bincode = "1.3.3"
 serde = { version = "1.0.193", features = ["derive"] }
 byteorder = "1.5.0"
+console-subscriber = "0.2.0"
 
 [[bin]]
 name = "main"
@@ -41,3 +42,4 @@ path = "src/btree.rs"
 
 [profile.release]
 #lto = true
+

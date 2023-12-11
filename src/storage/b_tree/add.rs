@@ -9,16 +9,8 @@ use std::{
     sync::{atomic::Ordering, Arc, Mutex},
 };
 use stopwatch::Stopwatch;
+use tokio::sync::RwLock;
 use tokio::sync::RwLockWriteGuard;
-
-// lazy_static! {
-//     static ref ADDS_HISTOGRAM: Histogram = register_histogram!(
-//         "btree_adds_histogram",
-//         "Btree add durations in microseconds",
-//         exponential_buckets(20.0, 3.0, 15).unwrap()
-//     )
-//     .unwrap();
-// }
 
 enum AddResult<K, V>
 where
@@ -76,6 +68,14 @@ where
             NodeLock::Node(node) => node,
         }
     }
+}
+
+struct Nodes<K, V>
+where
+    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    V: PartialEq + Clone + Debug + Send + Sync,
+{
+    nodes: Vec<Arc<RwLock<BTreeNode<K, V>>>>,
 }
 
 // struct NodeLock<'a, K, V>
@@ -158,6 +158,27 @@ where
 //     }
 // }
 
+// add_root_lock_waiters_count: Arc::new(0.into()),
+// add_root_lock_waiters_gauge,
+// add_node_lock_waiters_count: Arc::new(0.into()),
+// add_node_lock_waiters_gauge,
+// add_get_waiters_count: Arc::new(0.into()),
+// add_get_waiters_gauge,
+// add_persist_waiters_count: Arc::new(0.into()),
+// add_persist_waiters_gauge,
+// add_insert_waiters_count: Arc::new(0.into()),
+// add_insert_waiters_gauge,
+// add_workers_count: Arc::new(0.into()),
+// add_workers_gauge,
+
+struct HeldLocks<'a, K, V>
+where
+    K: Clone,
+{
+    root_lock: RwLockWriteGuard<'a, u32>,
+    node_locks: Vec<RwLockWriteGuard<'a, BTreeNode<K, V>>>,
+}
+
 impl<K, V, S> BTree<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
@@ -165,19 +186,46 @@ where
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn add_from_root(&self, key: K, value: V) {
+        self.add_workers_count.fetch_add(1, Ordering::Relaxed);
         let mut timing: Timing = Timing::default();
         timing.all.start();
 
         timing.root_lock.start();
+        self.add_root_lock_waiters_count
+            .fetch_add(1, Ordering::Relaxed);
         let root = self.root.write().await;
+        self.add_root_lock_waiters_count
+            .fetch_sub(1, Ordering::Relaxed);
         timing.root_lock.stop();
 
         let root_id = *root;
 
-        let root_lock = NodeLock::Root(root);
+        //let root_lock = NodeLock::Root(root);
+        //let nodes = Nodes { nodes: Vec::new() };
 
-        let (result, root_lock) = self
-            .add_recursive(root_id, key, value, &mut timing, root_lock)
+        timing.get.start();
+        self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
+        let root_node = self.store.get(root_id).await.unwrap();
+        self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
+        timing.get.stop();
+
+        timing.node_lock.start();
+        self.add_node_lock_waiters_count
+            .fetch_add(1, Ordering::Relaxed);
+        let root_node = root_node.write().await;
+        self.add_node_lock_waiters_count
+            .fetch_sub(1, Ordering::Relaxed);
+        timing.node_lock.stop();
+
+        let root = if root_node.keys.len() < self.max_keys_per_node {
+            drop(root);
+            None
+        } else {
+            Some(root)
+        };
+
+        let (result, traversed) = self
+            .add_recursive(root_node, key, value, &mut timing, 1)
             .await;
         match result {
             AddResult::AddedToNodeAndSplit(middle, middle_value, new_node) => {
@@ -189,19 +237,32 @@ where
                     children: vec![root_id, new_node],
                 };
 
-                let mut root = root_lock.unwrap().into_root();
-                *root = node_id;
+                // let mut root = root_lock.unwrap().into_root();
 
                 timing.insert.start();
+                self.add_insert_waiters_count
+                    .fetch_add(1, Ordering::Relaxed);
                 self.store.insert(new_root).await;
+                self.add_insert_waiters_count
+                    .fetch_sub(1, Ordering::Relaxed);
+
                 timing.insert.stop();
 
-                self.size.fetch_add(1, Ordering::SeqCst);
+                let mut root: RwLockWriteGuard<'_, u32> = root.unwrap();
+                *root = node_id;
+                drop(root);
+
+                self.size.fetch_add(1, Ordering::Relaxed);
+                let depth = self.depth.fetch_add(1, Ordering::Relaxed);
+                self.metrics.depth_gauge.set(depth as i64);
             }
             AddResult::AddedToNode | AddResult::AddedToDescendant => {
-                self.size.fetch_add(1, Ordering::SeqCst);
+                drop(root);
+                self.size.fetch_add(1, Ordering::Relaxed);
             }
-            _ => {}
+            _ => {
+                drop(root);
+            }
         };
 
         // adds_histogram
@@ -220,37 +281,40 @@ where
         let remaining =
             all - root_lock_wait - node_lock_wait - get_wait - persist_wait - insert_wait;
 
-        self.adds_histogram.observe(all);
-        self.add_root_lock_wait_histogram.observe(root_lock_wait);
-        self.add_node_lock_wait_histogram.observe(node_lock_wait);
-        self.add_get_wait_histogram.observe(get_wait);
-        self.add_persist_wait_histogram.observe(persist_wait);
-        self.add_insert_wait_histogram.observe(insert_wait);
-        self.add_remaining_histogram.observe(remaining);
+        self.metrics.adds_histogram.observe(all);
+        self.metrics
+            .add_root_lock_wait_histogram
+            .observe(root_lock_wait);
+        self.metrics
+            .add_node_lock_wait_histogram
+            .observe(node_lock_wait);
+        self.metrics.add_get_wait_histogram.observe(get_wait);
+        self.metrics
+            .add_persist_wait_histogram
+            .observe(persist_wait);
+        self.metrics.add_insert_wait_histogram.observe(insert_wait);
+        self.metrics.add_remaining_histogram.observe(remaining);
+        self.metrics
+            .add_traversals_histogram
+            .observe(traversed as f64);
+
+        self.add_workers_count.fetch_sub(1, Ordering::Relaxed);
     }
 
     #[async_recursion]
     async fn add_recursive(
         &self,
-        node_id: NodeId,
+        mut node: RwLockWriteGuard<'async_recursion, BTreeNode<K, V>>,
         key: K,
         value: V,
         timing: &mut Timing,
-        parent_lock: NodeLock<'life_self, K, V>,
-    ) -> (AddResult<K, V>, Option<NodeLock<'_, K, V>>) {
-        timing.get.start();
-        let locked_node = self.store.get(node_id).await.unwrap();
-        timing.get.stop();
-
-        timing.node_lock.start();
-        let mut node = locked_node.write().await;
-        timing.node_lock.stop();
-
+        depth: usize,
+    ) -> (AddResult<K, V>, usize) {
         // Iterate through the keys
         for (i, node_key) in node.keys.iter().enumerate() {
             if key == *node_key {
                 // The exact key exists, don't add it.
-                return (AddResult::NotAdded, Some(parent_lock));
+                return (AddResult::NotAdded, depth);
             }
             if key < *node_key {
                 // There is no key equal to the search key so it either
@@ -260,13 +324,34 @@ where
                 if node.children.len() > i {
                     // Yes, continue the search at child i.
                     let child_id = node.children[i];
-                    let node_lock = NodeLock::Node(node);
-                    let (result, node_lock) = self
-                        .add_recursive(child_id, key, value, timing, node_lock)
-                        .await;
 
-                    let result = self.handle_add(result, i, timing, node_lock.unwrap()).await;
-                    return (result, Some(parent_lock));
+                    timing.get.start();
+                    self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
+                    let child = self.store.get(child_id).await.unwrap();
+                    self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
+                    timing.get.stop();
+
+                    timing.node_lock.start();
+                    self.add_node_lock_waiters_count
+                        .fetch_add(1, Ordering::Relaxed);
+                    let child = child.write().await;
+                    self.add_node_lock_waiters_count
+                        .fetch_sub(1, Ordering::Relaxed);
+                    timing.node_lock.stop();
+
+                    let node = if child.keys.len() < self.max_keys_per_node {
+                        drop(node);
+                        None
+                    } else {
+                        Some(node)
+                    };
+
+                    //let node_lock = NodeLock::Node(node);
+                    let (result, depth) = self
+                        .add_recursive(child, key, value, timing, depth + 1)
+                        .await;
+                    let result = self.handle_add(result, i, timing, node).await;
+                    return (result, depth);
                 } else {
                     // No, so the key doesn't exist, but
                     // it should in this node at position i.
@@ -278,7 +363,7 @@ where
                         }
                         None => AddResult::AddedToNode,
                     };
-                    return (result, Some(parent_lock));
+                    return (result, depth);
                 }
             }
         }
@@ -289,15 +374,34 @@ where
             // Yes, continue the search at child i
             let child_id = node.children[num_children - 1];
             let num_keys = node.keys.len();
-            let node_lock = NodeLock::Node(node);
-            let (result, node_lock) = self
-                .add_recursive(child_id, key, value, timing, node_lock)
-                .await;
+            //let node_lock = NodeLock::Node(node);
 
-            let result = self
-                .handle_add(result, num_keys, timing, node_lock.unwrap())
+            timing.get.start();
+            self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
+            let child = self.store.get(child_id).await.unwrap();
+            self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
+            timing.get.stop();
+
+            timing.node_lock.start();
+            self.add_node_lock_waiters_count
+                .fetch_add(1, Ordering::Relaxed);
+            let child = child.write().await;
+            self.add_node_lock_waiters_count
+                .fetch_sub(1, Ordering::Relaxed);
+            timing.node_lock.stop();
+
+            let node = if child.keys.len() < self.max_keys_per_node {
+                drop(node);
+                None
+            } else {
+                Some(node)
+            };
+
+            let (result, depth) = self
+                .add_recursive(child, key, value, timing, depth + 1)
                 .await;
-            return (result, Some(parent_lock));
+            let result = self.handle_add(result, num_keys, timing, node).await;
+            return (result, depth);
         } else {
             // No, so the key doesn't exist, but
             // it should in this node at position i + 1
@@ -309,7 +413,7 @@ where
                 }
                 None => AddResult::AddedToNode,
             };
-            return (result, Some(parent_lock));
+            return (result, depth);
         }
     }
 
@@ -341,11 +445,19 @@ where
             };
 
             timing.persist.start();
+            self.add_persist_waiters_count
+                .fetch_add(1, Ordering::Relaxed);
             self.store.persist(node).await;
+            self.add_persist_waiters_count
+                .fetch_sub(1, Ordering::Relaxed);
             timing.persist.stop();
 
             timing.insert.start();
+            self.add_insert_waiters_count
+                .fetch_add(1, Ordering::Relaxed);
             self.store.insert(new_node).await;
+            self.add_insert_waiters_count
+                .fetch_sub(1, Ordering::Relaxed);
             timing.insert.stop();
 
             return Some((
@@ -356,7 +468,11 @@ where
         }
 
         timing.persist.start();
+        self.add_persist_waiters_count
+            .fetch_add(1, Ordering::Relaxed);
         self.store.persist(node).await;
+        self.add_persist_waiters_count
+            .fetch_sub(1, Ordering::Relaxed);
         timing.persist.stop();
 
         None
@@ -366,19 +482,18 @@ where
         result: AddResult<K, V>,
         i: usize,
         timing: &mut Timing,
-        node_lock: NodeLock<'_, K, V>,
+        node: Option<RwLockWriteGuard<'_, BTreeNode<K, V>>>,
     ) -> AddResult<K, V> {
         match result {
             AddResult::NotAdded => AddResult::NotAdded,
             AddResult::AddedToNode => {
-                let node = node_lock.into_node();
-                timing.persist.start();
-                self.store.persist(node).await;
-                timing.persist.stop();
+                // timing.persist.start();
+                // self.store.persist(node).await;
+                // timing.persist.stop();
                 AddResult::AddedToDescendant
             }
             AddResult::AddedToNodeAndSplit(middle, middle_value, new_node) => {
-                let mut node = node_lock.into_node();
+                let mut node = node.unwrap();
                 node.keys.insert(i, middle);
                 node.values.insert(i, middle_value);
                 node.children.insert(i + 1, new_node);
@@ -399,6 +514,8 @@ mod tests {
     use prometheus::Registry;
     use tokio::fs::remove_file;
 
+    use crate::storage::b_tree::metrics::BTreeMetrics;
+
     use super::super::{
         node_store::{DeserializeNode, I32NodeSerializer, NodeStore, SerializeNode},
         tree::BTree,
@@ -416,9 +533,9 @@ mod tests {
         if Path::new(path).exists() {
             remove_file(path).await.unwrap();
         }
-        let store = NodeStore::new_disk(path, serializer, 4, 4, 1, 1, &Registry::new()).await;
-
-        BTree::new(5, store, &Registry::new()).await
+        let metrics = BTreeMetrics::register(0, &Registry::new());
+        let store = NodeStore::new_disk(path, serializer, 4, 4, 1, 1, metrics.clone()).await;
+        BTree::new(0, 5, store, metrics).await
     }
 
     #[tokio::test]

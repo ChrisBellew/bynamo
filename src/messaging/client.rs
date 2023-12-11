@@ -58,7 +58,7 @@ impl MessageClient {
             }
         };
         self.stream_open_histogram
-            .observe(start.elapsed().as_micros() as f64);
+            .observe(start.elapsed().as_secs_f64());
 
         let ttfb = Instant::now();
         let bytes = bincode::serialize(&message).unwrap();
@@ -66,7 +66,7 @@ impl MessageClient {
         send.write_all(&bytes).await.unwrap();
         recv.read_to_end(1024 * 1024).await.unwrap();
         self.stream_ttfb_histogram
-            .observe(ttfb.elapsed().as_micros() as f64);
+            .observe(ttfb.elapsed().as_secs_f64());
     }
 }
 

@@ -10,16 +10,6 @@ use tokio::{
     sync::Mutex,
 };
 
-// lazy_static! {
-//     static ref WAL_SIZE_GAUGE: IntGauge =
-//         register_int_gauge!("wal_size", "Size of write ahead log in bytes").unwrap();
-//     static ref WAL_WRITE_HISTOGRAM: Histogram = register_histogram!(
-//         "wal_writes_histogram",
-//         "Write ahead log write durations in microseconds",
-//         exponential_buckets(20.0, 3.0, 15).unwrap()
-//     )
-//     .unwrap();
-// }
 #[derive(Clone)]
 pub struct WriteAheadLog {
     //writer: Arc<Mutex<BufWriter<File>>>,
@@ -73,9 +63,9 @@ impl WriteAheadLog {
         let wal_write_histogram = Histogram::with_opts(
             HistogramOpts::new(
                 "wal_writes_histogram",
-                "Write ahead log write durations in microseconds",
+                "Write ahead log write durations in seconds",
             )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
         )
         .unwrap();
         registry
@@ -85,9 +75,9 @@ impl WriteAheadLog {
         let wal_buffer_lock_wait_histogram = Histogram::with_opts(
             HistogramOpts::new(
                 "wal_buffer_lock_wait_histogram",
-                "Write ahead log buffer lock wait durations in microseconds",
+                "Write ahead log buffer lock wait durations in seconds",
             )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
         )
         .unwrap();
         registry
@@ -97,9 +87,9 @@ impl WriteAheadLog {
         let wal_buffer_flush_histogram = Histogram::with_opts(
             HistogramOpts::new(
                 "wal_buffer_flush_histogram",
-                "Write ahead log buffer flush durations in microseconds",
+                "Write ahead log buffer flush durations in seconds",
             )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
         )
         .unwrap();
         registry
@@ -149,7 +139,7 @@ impl WriteAheadLog {
                     not.notify_waiters();
 
                     //self.wal_buffer_lock_wait_histogram.observe(lock_wait);
-                    let flush_duration = start_flush.elapsed().as_micros() as f64;
+                    let flush_duration = start_flush.elapsed().as_secs_f64();
                     wal_buffer_flush_histogram.observe(flush_duration);
 
                     offset += wrote as u64;
@@ -182,9 +172,6 @@ impl WriteAheadLog {
     pub async fn write(&mut self, position: u64, key: &str, value: &str) -> Result<(), WriteError> {
         let start = Instant::now();
 
-        //let mut len = 0u32;
-        //let mut writer = self.writer.lock().await;
-        //let lock_wait = start.elapsed().as_micros() as f64;
         let mut buf = Vec::new();
 
         byteorder::WriteBytesExt::write_u64::<byteorder::BigEndian>(&mut buf, position).unwrap();
@@ -208,7 +195,7 @@ impl WriteAheadLog {
         notify.notified().await;
 
         self.wal_write_histogram
-            .observe(start.elapsed().as_micros() as f64);
+            .observe(start.elapsed().as_secs_f64());
 
         //let handle = tokio::spawn(async {});
 

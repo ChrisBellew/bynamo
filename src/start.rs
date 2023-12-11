@@ -5,6 +5,7 @@ use crate::{
     role_service::RoleService,
     storage::{
         b_tree::{
+            metrics::BTreeMetrics,
             node_store::{calculate_max_keys_per_node, NodeStore, StringNodeSerializer},
             tree::BTree,
         },
@@ -87,6 +88,7 @@ async fn create_btree_index(
     let serializer = StringNodeSerializer::new();
     let flush_every = 1000;
     let flush_buffer_max_size = 20000;
+    let metrics = BTreeMetrics::register(0, registry);
     let store: NodeStore<String, String, StringNodeSerializer> = NodeStore::new_disk(
         path,
         serializer,
@@ -94,19 +96,14 @@ async fn create_btree_index(
         value_size,
         flush_every,
         flush_buffer_max_size,
-        registry,
+        metrics.clone(),
     )
     .await;
     let persist_store = store.clone();
-    let btree = BTree::new(max_keys_per_node, store, registry).await;
+    let btree = BTree::new(0, max_keys_per_node, store, metrics).await;
     tokio::spawn(async move {
         loop {
-            if persist_store.flush_required().await {
-                //println!("Flushing");
-                persist_store.flush().await;
-            } else {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+            persist_store.flush().await;
         }
     });
     btree

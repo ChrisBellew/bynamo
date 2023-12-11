@@ -343,10 +343,12 @@ enum TakeResult<K, V> {
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::b_tree::metrics::BTreeMetrics;
+
     use super::super::node::BTreeNode;
     use super::super::node_store::{DeserializeNode, I32NodeSerializer, NodeStore, SerializeNode};
     use super::super::tree::BTree;
-    use prometheus::{exponential_buckets, Histogram, HistogramOpts, Registry};
+    use prometheus::{exponential_buckets, Histogram, HistogramOpts, IntGauge, Registry};
     use rand::prelude::SliceRandom;
     use rand::Rng;
     use std::collections::HashSet;
@@ -364,7 +366,8 @@ mod tests {
         if Path::new(path).exists() {
             remove_file(path).await.unwrap();
         }
-        NodeStore::new_disk(path, serializer, 4, 4, 1, 1, &Registry::new()).await
+        let metrics = BTreeMetrics::register(0, &Registry::new());
+        NodeStore::new_disk(path, serializer, 4, 4, 1, 1, metrics).await
     }
 
     fn create_btree<K, V, S>(size: u32, store: NodeStore<K, V, S>) -> BTree<K, V, S>
@@ -374,33 +377,36 @@ mod tests {
         S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
     {
         let adds_histogram = Histogram::with_opts(
-            HistogramOpts::new(
-                "btree_adds_histogram",
-                "Btree add durations in microseconds",
-            )
-            .buckets(exponential_buckets(20.0, 3.0, 15).unwrap()),
+            HistogramOpts::new("btree_adds_histogram", "Btree add durations in seconds")
+                .buckets(exponential_buckets(10f64.powf(-9.0), 3.0, 22).unwrap()),
         )
         .unwrap();
+
+        let depth_gauge = IntGauge::new("btree_depth_gauge", "Btree depth gauge").unwrap();
+
+        let registry = Registry::new();
+        let metrics = BTreeMetrics::register(0, &Registry::new());
 
         BTree {
             max_keys_per_node: 5,
             size: Arc::new((size as usize).into()),
+            depth: Arc::new(0.into()),
             root: Arc::new(RwLock::new(0)),
             store,
             next_node_id: Arc::new(size.into()),
-            adds_histogram: adds_histogram.clone(),
-            add_root_lock_wait_histogram: adds_histogram.clone(),
-            add_node_lock_wait_histogram: adds_histogram.clone(),
-            add_get_wait_histogram: adds_histogram.clone(),
-            add_persist_wait_histogram: adds_histogram.clone(),
-            add_insert_wait_histogram: adds_histogram.clone(),
-            add_remaining_histogram: adds_histogram.clone(),
+            add_root_lock_waiters_count: Arc::new(1.into()),
+            add_node_lock_waiters_count: Arc::new(1.into()),
+            add_get_waiters_count: Arc::new(1.into()),
+            add_persist_waiters_count: Arc::new(1.into()),
+            add_insert_waiters_count: Arc::new(1.into()),
+            add_workers_count: Arc::new(1.into()),
+            metrics,
         }
     }
 
     #[tokio::test]
     async fn btree_remove_only_key_in_only_node() {
-        let mut store = create_store("btree_remove_only_key_in_only_node").await;
+        let store = create_store("btree_remove_only_key_in_only_node").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -416,7 +422,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_only_node() {
-        let mut store = create_store("btree_remove_first_key_in_only_node").await;
+        let store = create_store("btree_remove_first_key_in_only_node").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -432,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_middle_key_in_only_node() {
-        let mut store = create_store("btree_remove_middle_key_in_only_node").await;
+        let store = create_store("btree_remove_middle_key_in_only_node").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -448,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_only_node() {
-        let mut store = create_store("btree_remove_last_key_in_only_node").await;
+        let store = create_store("btree_remove_last_key_in_only_node").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -464,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_leaf_without_underflow() {
-        let mut store = create_store("btree_remove_first_key_in_leaf_without_underflow").await;
+        let store = create_store("btree_remove_first_key_in_leaf_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -504,7 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_middle_key_in_leaf_without_underflow() {
-        let mut store = create_store("btree_remove_middle_key_in_leaf_without_underflow").await;
+        let store = create_store("btree_remove_middle_key_in_leaf_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -544,7 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_leaf_without_underflow() {
-        let mut store = create_store("btree_remove_last_key_in_leaf_without_underflow").await;
+        let store = create_store("btree_remove_last_key_in_leaf_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -585,7 +591,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_first_leaf_with_underflow_take_from_right_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_first_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
+        let store = create_store("btree_remove_first_key_in_first_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -626,7 +632,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_first_leaf_with_underflow_take_from_right_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_first_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
+        let store = create_store("btree_remove_last_key_in_first_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -667,7 +673,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_middle_leaf_with_underflow_take_from_left_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_middle_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
+        let store = create_store("btree_remove_first_key_in_middle_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -708,7 +714,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_middle_leaf_with_underflow_take_from_left_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_middle_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
+        let store = create_store("btree_remove_last_key_in_middle_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -749,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_middle_leaf_with_underflow_take_from_right_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_middle_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
+        let store = create_store("btree_remove_first_key_in_middle_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -790,7 +796,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_middle_leaf_with_underflow_take_from_right_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_middle_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
+        let store = create_store("btree_remove_last_key_in_middle_leaf_with_underflow_take_from_right_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -831,7 +837,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_last_leaf_with_underflow_take_from_left_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_last_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
+        let store = create_store("btree_remove_first_key_in_last_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -872,7 +878,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_last_leaf_with_underflow_take_from_left_sibling_without_underflow(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_last_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
+        let store = create_store("btree_remove_last_key_in_last_leaf_with_underflow_take_from_left_sibling_without_underflow").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -913,7 +919,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_first_leaf_with_underflow_cant_take_from_siblings_merge_with_right(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_first_leaf_with_underflow_cant_take_from_siblings_merge_with_right").await;
+        let store = create_store("btree_remove_first_key_in_first_leaf_with_underflow_cant_take_from_siblings_merge_with_right").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -954,7 +960,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_first_leaf_with_underflow_cant_take_from_siblings_merge_with_right(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_first_leaf_with_underflow_cant_take_from_siblings_merge_with_right").await;
+        let store = create_store("btree_remove_last_key_in_first_leaf_with_underflow_cant_take_from_siblings_merge_with_right").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -995,7 +1001,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_middle_leaf_with_underflow_cant_take_from_siblings_merge_with_left(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_middle_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
+        let store = create_store("btree_remove_first_key_in_middle_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -1036,7 +1042,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_middle_leaf_with_underflow_cant_take_from_siblings_merge_with_left(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_middle_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
+        let store = create_store("btree_remove_last_key_in_middle_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -1077,7 +1083,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_first_key_in_last_leaf_with_underflow_cant_take_from_siblings_merge_with_left(
     ) {
-        let mut store = create_store("btree_remove_first_key_in_last_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
+        let store = create_store("btree_remove_first_key_in_last_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -1118,7 +1124,7 @@ mod tests {
     #[tokio::test]
     async fn btree_remove_last_key_in_last_leaf_with_underflow_cant_take_from_siblings_merge_with_left(
     ) {
-        let mut store = create_store("btree_remove_last_key_in_last_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
+        let store = create_store("btree_remove_last_key_in_last_leaf_with_underflow_cant_take_from_siblings_merge_with_left").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -1158,7 +1164,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_internal_without_underflow_take_predecessor() {
-        let mut store =
+        let store =
             create_store("btree_remove_first_key_in_internal_without_underflow_take_predecessor")
                 .await;
         store
@@ -1200,7 +1206,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_internal_without_underflow_take_predecessor() {
-        let mut store =
+        let store =
             create_store("btree_remove_last_key_in_internal_without_underflow_take_predecessor")
                 .await;
         store
@@ -1242,7 +1248,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_internal_without_underflow_take_successor() {
-        let mut store =
+        let store =
             create_store("btree_remove_last_key_in_internal_without_underflow_take_successor")
                 .await;
         store
@@ -1284,7 +1290,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_internal_with_underflow_merge_children() {
-        let mut store =
+        let store =
             create_store("btree_remove_first_key_in_internal_with_underflow_merge_children").await;
         store
             .insert(BTreeNode {
@@ -1325,7 +1331,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_internal_with_underflow_merge_children() {
-        let mut store =
+        let store =
             create_store("btree_remove_last_key_in_internal_with_underflow_merge_children").await;
         store
             .insert(BTreeNode {
@@ -1366,7 +1372,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_first_internal_with_underflow_take_from_right_sibling() {
-        let mut store = create_store(
+        let store = create_store(
             "btree_remove_first_key_in_first_internal_with_underflow_take_from_right_sibling",
         )
         .await;
@@ -1457,7 +1463,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_first_internal_with_underflow_take_from_right_sibling() {
-        let mut store = create_store(
+        let store = create_store(
             "btree_remove_last_key_in_first_internal_with_underflow_take_from_right_sibling",
         )
         .await;
@@ -1548,7 +1554,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_last_internal_with_underflow_take_from_left_sibling() {
-        let mut store = create_store(
+        let store = create_store(
             "btree_remove_first_key_in_last_internal_with_underflow_take_from_left_sibling",
         )
         .await;
@@ -1639,7 +1645,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_last_internal_with_underflow_take_from_left_sibling() {
-        let mut store = create_store(
+        let store = create_store(
             "btree_remove_last_key_in_last_internal_with_underflow_take_from_left_sibling",
         )
         .await;
@@ -1730,7 +1736,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_first_internal_with_underflow_pull_parent() {
-        let mut store =
+        let store =
             create_store("btree_remove_first_key_in_first_internal_with_underflow_pull_parent")
                 .await;
         store
@@ -1812,7 +1818,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_first_internal_with_underflow_pull_parent() {
-        let mut store =
+        let store =
             create_store("btree_remove_last_key_in_first_internal_with_underflow_pull_parent")
                 .await;
         store
@@ -1894,7 +1900,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_first_key_in_last_internal_with_underflow_pull_parent() {
-        let mut store =
+        let store =
             create_store("btree_remove_first_key_in_last_internal_with_underflow_pull_parent")
                 .await;
         store
@@ -1976,7 +1982,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_last_key_in_last_internal_with_underflow_pull_parent() {
-        let mut store =
+        let store =
             create_store("btree_remove_last_key_in_last_internal_with_underflow_pull_parent").await;
         store
             .insert(BTreeNode {
@@ -2057,7 +2063,7 @@ mod tests {
 
     #[tokio::test]
     async fn btree_remove_root_in_three_layer_tree() {
-        let mut store = create_store("btree_remove_root_in_three_layer_tree").await;
+        let store = create_store("btree_remove_root_in_three_layer_tree").await;
         store
             .insert(BTreeNode {
                 node_id: 0,
@@ -2140,8 +2146,13 @@ mod tests {
         for _ in 0..10000 {
             let store: NodeStore<i32, i32, I32NodeSerializer> =
                 NodeStore::<i32, i32, I32NodeSerializer>::new_memory();
-            let mut tree =
-                BTree::<i32, i32, I32NodeSerializer>::new(5, store, &Registry::new()).await;
+            let mut tree = BTree::<i32, i32, I32NodeSerializer>::new(
+                1,
+                5,
+                store,
+                BTreeMetrics::register(0, &Registry::new()),
+            )
+            .await;
             let mut added = HashSet::new();
 
             for _ in 0..rand::thread_rng().gen_range(1..100) {
@@ -2182,7 +2193,7 @@ mod tests {
                 // Validate with cache cleared
                 tree.validate().await;
             }
-            assert_eq!(tree.list_keys().await, vec![]);
+            assert_eq!(tree.list_keys().await.len(), 0);
         }
     }
 

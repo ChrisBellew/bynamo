@@ -1,11 +1,16 @@
 use maplit::hashmap;
-use prometheus::{exponential_buckets, labels, Histogram, HistogramOpts, Registry};
+use prometheus::{
+    exponential_buckets, labels, linear_buckets, Histogram, HistogramOpts, IntGauge, Registry,
+};
 use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::{self, Duration, Instant},
 };
 use storage::b_tree::{
+    metrics::BTreeMetrics,
     node_store::{calculate_max_keys_per_node, NodeStore, StringNodeSerializer},
     tree::BTree,
 };
@@ -18,8 +23,10 @@ mod start;
 mod storage;
 mod util;
 
-#[tokio::main]
+#[tokio::main(worker_threads = 10)]
 pub async fn main() {
+    console_subscriber::init();
+
     let node_id = 0;
     let registry = Registry::new_custom(
         None,
@@ -30,7 +37,7 @@ pub async fn main() {
     .unwrap();
     let registry_push = registry.clone();
 
-    tokio::task::spawn_blocking(move || loop {
+    thread::spawn(move || loop {
         let metric_families = registry_push.gather();
         //println!("Pushing metrics {:?}", metric_families);
         match prometheus::push_metrics(
@@ -59,60 +66,74 @@ pub async fn main() {
         .unwrap();
 
     // Stress test Btree
-    delete_file_if_exists("scratch/btree");
     let key_size = 64;
-    let value_size = 64;
-    let flush_every = 2000;
-    let flush_buffer_max_size = 6000;
+    let value_size = 9;
+    let flush_every = 0; //2000;
+    let flush_buffer_max_size = 1000;
     let keys = calculate_max_keys_per_node(key_size, value_size);
-    let serializer = StringNodeSerializer::new();
-    let store = NodeStore::new_disk(
-        "scratch/btree",
-        serializer,
-        key_size,
-        value_size,
-        flush_every,
-        flush_buffer_max_size,
-        &registry,
-    )
-    .await;
 
-    {
-        let store = store.clone();
-        tokio::spawn(async move {
-            loop {
-                if store.flush_required().await {
-                    //println!("Flushing");
+    let partitions: usize = 8;
+    let mut trees = Vec::new();
+
+    for tree_id in 0..partitions {
+        let path = format!("scratch/btree_{}", tree_id);
+        delete_file_if_exists(&path);
+
+        let serializer = StringNodeSerializer::new();
+        let metrics = BTreeMetrics::register(tree_id, &registry);
+        let store = NodeStore::new_disk(
+            &path,
+            serializer,
+            key_size,
+            value_size,
+            flush_every,
+            flush_buffer_max_size,
+            metrics.clone(),
+        )
+        .await;
+
+        {
+            let store = store.clone();
+            tokio::spawn(async move {
+                loop {
                     store.flush().await;
-                } else {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
                 }
-            }
-        });
+            });
+        }
+
+        let btree = BTree::new(tree_id, keys, store.clone(), metrics).await;
+        trees.push(btree);
     }
 
-    let btree = BTree::new(keys, store.clone(), &registry).await;
+    let partitioner = Partitioner::new(partitions);
+
     // let wal = WriteAheadLog::create("scratch/wal", "wal_index", &registry)
     //     .await
     //     .unwrap();
     let mut handles = Vec::new();
     let count = Arc::new(AtomicU64::new(0));
     let total = 10_000_000;
-    let workers = 50;
+    let workers = 30;
     for i in 0..workers {
-        let store = store.clone();
-        let mut btree = btree.clone();
+        //let store = store.clone();
+        let partitioner = partitioner.clone();
+        let mut trees = trees.clone();
         let count = count.clone();
         let buffer_backoffs_histogram = buffer_backoffs_histogram.clone();
         handles.push(tokio::spawn(async move {
             for j in 0..total / workers {
-                while store.flush_buffer_full().await {
-                    buffer_backoffs_histogram.observe(store.flush_buffer_size().await as f64);
+                let random = rand::random::<u64>();
+                let key = format!("key_{}", random);
+                let value = "value".to_string();
+                let partition = partitioner.partition(&key);
+                let tree = trees.get_mut(partition).unwrap();
+
+                while tree.store.flush_buffer_full().await {
+                    buffer_backoffs_histogram.observe(tree.store.flush_buffer_size().await as f64);
                     tokio::time::sleep(Duration::from_millis(1)).await;
                 }
-                btree
-                    .add(format!("key_{}_{}", i, j), format!("value_{}_{}", i, j))
-                    .await;
+
+                tree.add(key, value).await;
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }));
@@ -131,5 +152,23 @@ pub async fn main() {
     });
     for handle in handles {
         handle.await.unwrap();
+    }
+}
+
+#[derive(Clone)]
+struct Partitioner {
+    partitions: usize,
+}
+
+impl Partitioner {
+    fn new(partitions: usize) -> Partitioner {
+        Partitioner { partitions }
+    }
+
+    fn partition(&self, key: &str) -> usize {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let hash = hasher.finish();
+        (hash % self.partitions as u64) as usize
     }
 }
