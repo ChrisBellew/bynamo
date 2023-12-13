@@ -67,12 +67,12 @@ pub async fn main() {
 
     // Stress test Btree
     let key_size = 64;
-    let value_size = 9;
+    let value_size = 64;
     let flush_every = 0; //2000;
     let flush_buffer_max_size = 1000;
     let keys = calculate_max_keys_per_node(key_size, value_size);
 
-    let partitions: usize = 8;
+    let partitions: usize = 1;
     let mut trees = Vec::new();
 
     for tree_id in 0..partitions {
@@ -113,18 +113,20 @@ pub async fn main() {
     let mut handles = Vec::new();
     let count = Arc::new(AtomicU64::new(0));
     let total = 10_000_000;
-    let workers = 30;
+    let workers = 2;
     for i in 0..workers {
         //let store = store.clone();
         let partitioner = partitioner.clone();
         let mut trees = trees.clone();
         let count = count.clone();
         let buffer_backoffs_histogram = buffer_backoffs_histogram.clone();
+        let key = "1234567".repeat(5).to_string();
+        let value = "1234567890".repeat(6).to_string();
         handles.push(tokio::spawn(async move {
             for j in 0..total / workers {
                 let random = rand::random::<u64>();
-                let key = format!("key_{}", random);
-                let value = "value".to_string();
+                let key = format!("key_{}_{}", key, random);
+                //let value = "1234567890".to_string();
                 let partition = partitioner.partition(&key);
                 let tree = trees.get_mut(partition).unwrap();
 
@@ -133,7 +135,7 @@ pub async fn main() {
                     tokio::time::sleep(Duration::from_millis(1)).await;
                 }
 
-                tree.add(key, value).await;
+                tree.add(key, value.clone()).await;
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }));

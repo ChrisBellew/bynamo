@@ -9,7 +9,7 @@ use tokio::sync::RwLockWriteGuard;
 
 impl<K, V, S> BTree<K, V, S>
 where
-    K: PartialOrd + Display + Debug + Clone + Send + Sync,
+    K: Ord + Display + Debug + Clone + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
@@ -372,7 +372,7 @@ mod tests {
 
     fn create_btree<K, V, S>(size: u32, store: NodeStore<K, V, S>) -> BTree<K, V, S>
     where
-        K: PartialOrd + Clone + Debug + Display + Send + Sync,
+        K: Ord + Clone + Debug + Display + Send + Sync,
         V: PartialEq + Clone + Debug + Display + Send + Sync,
         S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
     {
@@ -2200,7 +2200,7 @@ mod tests {
 
     async fn remove_and_validate<K, V, S>(tree: &mut BTree<K, V, S>, key_to_remove: K)
     where
-        K: PartialOrd + Clone + Display + Debug + Send + Sync,
+        K: Ord + Clone + Display + Debug + Send + Sync,
         V: PartialEq + Clone + Debug + Display + Send + Sync,
         S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
     {

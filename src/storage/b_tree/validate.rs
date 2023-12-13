@@ -13,13 +13,13 @@ type NodeCount = usize;
 
 impl<K, V, S> BTree<K, V, S>
 where
-    K: PartialOrd + Display + Debug + Clone + Send + Sync,
+    K: Ord + Display + Debug + Clone + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn validate(&self)
     where
-        K: PartialOrd + Clone + Debug + Display + Send + Sync,
+        K: Ord + Clone + Debug + Display + Send + Sync,
         V: PartialEq + Clone + Debug + Display + Send + Sync,
     {
         let root = self.root.read().await;
@@ -40,7 +40,7 @@ where
         parent_key_right: Option<K>,
     ) -> (MaxDepth, KeyCount, NodeCount)
     where
-        K: PartialOrd + Clone + Debug + Display,
+        K: Ord + Clone + Debug + Display,
         V: Clone + Debug,
     {
         let node = self.store.get(node).await.unwrap();

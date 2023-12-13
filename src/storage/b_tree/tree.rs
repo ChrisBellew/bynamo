@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct BTree<K, V, S>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
@@ -47,7 +47,7 @@ where
 
 impl<K, V, S> BTree<K, V, S>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {

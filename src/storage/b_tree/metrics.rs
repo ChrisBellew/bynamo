@@ -20,6 +20,7 @@ pub struct BTreeMetrics {
     pub add_insert_waiters_gauge: IntGauge,
     pub add_workers_gauge: IntGauge,
     pub add_bytes_counter: IntCounter,
+    pub write_bytes_counter: IntCounter,
     pub node_count_gauge: IntGauge,
     pub depth_gauge: IntGauge,
 
@@ -209,6 +210,15 @@ impl BTreeMetrics {
             .register(Box::new(add_bytes_counter.clone()))
             .unwrap();
 
+        let write_bytes_counter = IntCounter::with_opts(
+            Opts::new("btree_write_bytes_counter", "Btree write bytes counter")
+                .const_label("tree", tree_id.to_string()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(write_bytes_counter.clone()))
+            .unwrap();
+
         let node_count_gauge = IntGauge::with_opts(
             Opts::new("btree_node_count_gauge", "Btree node count gauge")
                 .const_label("tree", tree_id.to_string()),
@@ -332,6 +342,7 @@ impl BTreeMetrics {
             add_insert_waiters_gauge,
             add_workers_gauge,
             add_bytes_counter,
+            write_bytes_counter,
             node_count_gauge,
             depth_gauge,
             writes_histogram,

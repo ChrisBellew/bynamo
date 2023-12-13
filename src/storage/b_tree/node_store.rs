@@ -29,7 +29,7 @@ use tokio::{
 #[derive(Clone)]
 pub enum NodeStore<K, V, S>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
@@ -39,7 +39,7 @@ where
 
 impl<K, V, S> NodeStore<K, V, S>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
@@ -138,7 +138,7 @@ type GuardedNode<K, V> = RwLock<BTreeNode<K, V>>;
 #[derive(Clone)]
 pub struct MemoryNodeStore<K, V>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     nodes: Arc<DashMap<NodeId, Arc<GuardedNode<K, V>>>>,
@@ -146,7 +146,7 @@ where
 
 impl<K, V> PartialEq for MemoryNodeStore<K, V>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -160,7 +160,7 @@ where
 
 impl<K, V> MemoryNodeStore<K, V>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     fn new() -> Self {
@@ -224,7 +224,7 @@ pub static NODE_INSERT_MICROSECONDS_DURATION_TOTAL: AtomicUsize = AtomicUsize::n
 #[derive(Clone)]
 pub struct DiskNodeStore<K, V, S>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
@@ -246,7 +246,7 @@ where
 
 impl<K, V, S> DiskNodeStore<K, V, S>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
@@ -503,6 +503,7 @@ where
         let start_position = file.stream_position().await.unwrap();
         let mut position = start_position;
 
+        let mut written_bytes = 0;
         let mut writer = BufWriter::new(&mut *file);
 
         for node in nodes {
@@ -513,14 +514,18 @@ where
                 self.key_size,
                 self.value_size,
                 &mut position,
+                &mut written_bytes,
             )
             .await;
         }
 
         writer.flush().await.unwrap();
+
         self.metrics
             .flush_size_histogram
-            .observe((position - start_position) as f64);
+            .observe(written_bytes as f64);
+
+        self.metrics.write_bytes_counter.inc_by(written_bytes);
     }
 
     async fn write_node(
@@ -531,6 +536,7 @@ where
         key_size: usize,
         value_size: usize,
         position: &mut u64,
+        written_bytes: &mut u64,
     ) {
         let node = node.read().await;
 
@@ -590,6 +596,7 @@ where
         }
 
         *position += size;
+        *written_bytes += size;
 
         // let fill = vec![0u8; MAX_NODE_SIZE_BYTES as usize - size as usize];
         // writer.write_all(&fill).await.unwrap();
@@ -637,7 +644,7 @@ pub fn calculate_max_keys_per_node(key_size: usize, value_size: usize) -> usize 
 #[async_trait]
 pub trait SerializeNode<K, V>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     async fn serialize_key<W: AsyncWrite + Unpin + Send>(&self, node: &K, writer: &mut W) -> usize;
@@ -651,7 +658,7 @@ where
 #[async_trait]
 pub trait DeserializeNode<K, V>
 where
-    K: PartialOrd + Clone + Debug + Display + Send + Sync,
+    K: Ord + Clone + Debug + Display + Send + Sync,
     V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     async fn deserialize_key<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (K, usize);
