@@ -1,5 +1,6 @@
 use prometheus::{
-    exponential_buckets, linear_buckets, Histogram, HistogramOpts, IntGauge, Opts, Registry,
+    exponential_buckets, linear_buckets, Histogram, HistogramOpts, IntCounter, IntGauge, Opts,
+    Registry,
 };
 
 #[derive(Clone)]
@@ -18,6 +19,7 @@ pub struct BTreeMetrics {
     pub add_persist_waiters_gauge: IntGauge,
     pub add_insert_waiters_gauge: IntGauge,
     pub add_workers_gauge: IntGauge,
+    pub add_bytes_counter: IntCounter,
     pub node_count_gauge: IntGauge,
     pub depth_gauge: IntGauge,
 
@@ -198,6 +200,15 @@ impl BTreeMetrics {
             .register(Box::new(add_workers_gauge.clone()))
             .unwrap();
 
+        let add_bytes_counter = IntCounter::with_opts(
+            Opts::new("btree_add_bytes_counter", "Btree add bytes counter")
+                .const_label("tree", tree_id.to_string()),
+        )
+        .unwrap();
+        registry
+            .register(Box::new(add_bytes_counter.clone()))
+            .unwrap();
+
         let node_count_gauge = IntGauge::with_opts(
             Opts::new("btree_node_count_gauge", "Btree node count gauge")
                 .const_label("tree", tree_id.to_string()),
@@ -320,6 +331,7 @@ impl BTreeMetrics {
             add_persist_waiters_gauge,
             add_insert_waiters_gauge,
             add_workers_gauge,
+            add_bytes_counter,
             node_count_gauge,
             depth_gauge,
             writes_histogram,

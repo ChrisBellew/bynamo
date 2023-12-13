@@ -10,7 +10,7 @@ use tokio::sync::RwLockWriteGuard;
 impl<K, V, S> BTree<K, V, S>
 where
     K: PartialOrd + Display + Debug + Clone + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn remove_from_root(&self, key: &K) {
@@ -373,7 +373,7 @@ mod tests {
     fn create_btree<K, V, S>(size: u32, store: NodeStore<K, V, S>) -> BTree<K, V, S>
     where
         K: PartialOrd + Clone + Debug + Display + Send + Sync,
-        V: PartialEq + Clone + Debug + Send + Sync,
+        V: PartialEq + Clone + Debug + Display + Send + Sync,
         S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
     {
         let adds_histogram = Histogram::with_opts(
@@ -400,6 +400,7 @@ mod tests {
             add_persist_waiters_count: Arc::new(1.into()),
             add_insert_waiters_count: Arc::new(1.into()),
             add_workers_count: Arc::new(1.into()),
+            add_bytes_count: Arc::new(0.into()),
             metrics,
         }
     }
@@ -2200,7 +2201,7 @@ mod tests {
     async fn remove_and_validate<K, V, S>(tree: &mut BTree<K, V, S>, key_to_remove: K)
     where
         K: PartialOrd + Clone + Display + Debug + Send + Sync,
-        V: PartialEq + Clone + Debug + Send + Sync,
+        V: PartialEq + Clone + Debug + Display + Send + Sync,
         S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
     {
         tree.print().await;

@@ -14,13 +14,13 @@ type NodeCount = usize;
 impl<K, V, S> BTree<K, V, S>
 where
     K: PartialOrd + Display + Debug + Clone + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn validate(&self)
     where
         K: PartialOrd + Clone + Debug + Display + Send + Sync,
-        V: PartialEq + Clone + Debug + Send + Sync,
+        V: PartialEq + Clone + Debug + Display + Send + Sync,
     {
         let root = self.root.read().await;
         let (_, key_count, _node_count) = self.validate_recursive(*root, true, None, None).await;

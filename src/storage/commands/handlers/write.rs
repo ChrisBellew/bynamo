@@ -77,7 +77,7 @@ impl WriteCommandHandler {
         // // //let position = self.write_ahead_log.next_position();
 
         // // // Write to the WAL first so that we can recover if the node crashes
-        //self.write_ahead_log.write_new(&key, &value).await?;
+        self.write_ahead_log.write_new(&key, &value).await?;
 
         self.btree.add(key, value).await;
 

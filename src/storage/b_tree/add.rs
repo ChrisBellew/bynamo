@@ -4,8 +4,10 @@ use super::{
     tree::BTree,
 };
 use async_recursion::async_recursion;
+use futures::Future;
 use std::{
     fmt::{Debug, Display},
+    pin::Pin,
     sync::{atomic::Ordering, Arc, Mutex},
 };
 use stopwatch::Stopwatch;
@@ -15,7 +17,7 @@ use tokio::sync::RwLockWriteGuard;
 enum AddResult<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     AddedToNode,
     AddedToNodeAndSplit(K, V, NodeId),
@@ -36,7 +38,7 @@ struct Timing {
 // struct Locks<'a, K, V>
 // where
 //     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-//     V: PartialEq + Clone + Debug + Send + Sync,
+//     V: PartialEq + Clone + Debug + Display + Send + Sync,
 // {
 //     root: Option<RwLockWriteGuard<'a, u32>>,
 //     nodes: Vec<&'a mut Option<RwLockWriteGuard<'a, BTreeNode<K, V>>>>,
@@ -45,7 +47,7 @@ struct Timing {
 enum NodeLock<'a, K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     Root(RwLockWriteGuard<'a, u32>),
     Node(RwLockWriteGuard<'a, BTreeNode<K, V>>),
@@ -54,8 +56,14 @@ where
 impl<'a, K, V> NodeLock<'a, K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
+    fn from_root(root: RwLockWriteGuard<'a, u32>) -> NodeLock<'a, K, V> {
+        NodeLock::Root(root)
+    }
+    fn from_node(node: RwLockWriteGuard<'a, BTreeNode<K, V>>) -> NodeLock<'a, K, V> {
+        NodeLock::Node(node)
+    }
     fn into_root(self) -> RwLockWriteGuard<'a, u32> {
         match self {
             NodeLock::Root(root) => root,
@@ -73,7 +81,7 @@ where
 struct Nodes<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     nodes: Vec<Arc<RwLock<BTreeNode<K, V>>>>,
 }
@@ -81,7 +89,7 @@ where
 // struct NodeLock<'a, K, V>
 // where
 //     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-//     V: PartialEq + Clone + Debug + Send + Sync,
+//     V: PartialEq + Clone + Debug + Display + Send + Sync,
 // {
 //     lock: Option<RwLockWriteGuard<'a, BTreeNode<K, V>>>,
 //     parent: Option<Arc<Mutex<NodeLock<'a, K, V>>>>,
@@ -91,7 +99,7 @@ where
 // impl<'a, K, V> NodeLock<'a, K, V>
 // where
 //     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-//     V: PartialEq + Clone + Debug + Send + Sync,
+//     V: PartialEq + Clone + Debug + Display + Send + Sync,
 // {
 //     fn new_with_root(root: RwLockWriteGuard<'a, u32>) -> NodeLock<'a, K, V> {
 //         NodeLock {
@@ -133,7 +141,7 @@ where
 // impl<'a, K, V> Locks<'a, K, V>
 // where
 //     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-//     V: PartialEq + Clone + Debug + Send + Sync,
+//     V: PartialEq + Clone + Debug + Display + Send + Sync,
 // {
 //     fn new_with_root(root: RwLockWriteGuard<'a, u32>) -> Locks<'a, K, V> {
 //         Locks {
@@ -171,6 +179,14 @@ where
 // add_workers_count: Arc::new(0.into()),
 // add_workers_gauge,
 
+// enum NodeLock<K, V>
+// where
+//     K: Clone,
+// {
+//     Root(RwLockWriteGuard<'a, NodeId>),
+//     Node(RwLockWriteGuard<'a, BTreeNode<K, V>>),
+// }
+
 struct HeldLocks<'a, K, V>
 where
     K: Clone,
@@ -182,10 +198,12 @@ where
 impl<K, V, S> BTree<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn add_from_root(&self, key: K, value: V) {
+        let len = (key.to_string().len() + value.to_string().len()) as u64;
+
         self.add_workers_count.fetch_add(1, Ordering::Relaxed);
         let mut timing: Timing = Timing::default();
         timing.all.start();
@@ -203,30 +221,22 @@ where
         //let root_lock = NodeLock::Root(root);
         //let nodes = Nodes { nodes: Vec::new() };
 
-        timing.get.start();
-        self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
-        let root_node = self.store.get(root_id).await.unwrap();
-        self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
-        timing.get.stop();
+        // let root = if root_node.keys.len() < self.max_keys_per_node {
+        //     drop(root);
+        //     None
+        // } else {
+        //     Some(root)
+        // };
 
-        timing.node_lock.start();
-        self.add_node_lock_waiters_count
-            .fetch_add(1, Ordering::Relaxed);
-        let root_node = root_node.write().await;
-        self.add_node_lock_waiters_count
-            .fetch_sub(1, Ordering::Relaxed);
-        timing.node_lock.stop();
-
-        let root = if root_node.keys.len() < self.max_keys_per_node {
-            drop(root);
-            None
-        } else {
-            Some(root)
-        };
+        let mut higher_locks = Vec::new();
+        higher_locks.push(NodeLock::from_root(root));
 
         let (result, traversed) = self
-            .add_recursive(root_node, key, value, &mut timing, 1)
+            .add_recursive(root_id, key, value, &mut timing, 1, &mut higher_locks)
             .await;
+        let root = higher_locks.pop();
+        drop(higher_locks);
+
         match result {
             AddResult::AddedToNodeAndSplit(middle, middle_value, new_node) => {
                 let node_id = self.next_node_id.fetch_add(1, Ordering::SeqCst);
@@ -248,7 +258,8 @@ where
 
                 timing.insert.stop();
 
-                let mut root: RwLockWriteGuard<'_, u32> = root.unwrap();
+                let mut root = root.unwrap().into_root();
+                //drop(higher_locks);
                 *root = node_id;
                 drop(root);
 
@@ -299,122 +310,177 @@ where
             .observe(traversed as f64);
 
         self.add_workers_count.fetch_sub(1, Ordering::Relaxed);
+        self.add_bytes_count.fetch_add(len, Ordering::Relaxed);
+
+        self.metrics.add_bytes_counter.inc_by(len as u64);
     }
 
-    #[async_recursion]
-    async fn add_recursive(
-        &self,
-        mut node: RwLockWriteGuard<'async_recursion, BTreeNode<K, V>>,
+    fn add_recursive<'a, 'b: 'a, 'c: 'a>(
+        &'a self,
+        node_id: NodeId,
         key: K,
         value: V,
-        timing: &mut Timing,
+        timing: &'c mut Timing,
         depth: usize,
-    ) -> (AddResult<K, V>, usize) {
-        // Iterate through the keys
-        for (i, node_key) in node.keys.iter().enumerate() {
-            if key == *node_key {
-                // The exact key exists, don't add it.
-                return (AddResult::NotAdded, depth);
-            }
-            if key < *node_key {
-                // There is no key equal to the search key so it either
-                // doesn't exist or exists in child i.
-
-                // Does child i exist?
-                if node.children.len() > i {
-                    // Yes, continue the search at child i.
-                    let child_id = node.children[i];
-
-                    timing.get.start();
-                    self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
-                    let child = self.store.get(child_id).await.unwrap();
-                    self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
-                    timing.get.stop();
-
-                    timing.node_lock.start();
-                    self.add_node_lock_waiters_count
-                        .fetch_add(1, Ordering::Relaxed);
-                    let child = child.write().await;
-                    self.add_node_lock_waiters_count
-                        .fetch_sub(1, Ordering::Relaxed);
-                    timing.node_lock.stop();
-
-                    let node = if child.keys.len() < self.max_keys_per_node {
-                        drop(node);
-                        None
-                    } else {
-                        Some(node)
-                    };
-
-                    //let node_lock = NodeLock::Node(node);
-                    let (result, depth) = self
-                        .add_recursive(child, key, value, timing, depth + 1)
-                        .await;
-                    let result = self.handle_add(result, i, timing, node).await;
-                    return (result, depth);
-                } else {
-                    // No, so the key doesn't exist, but
-                    // it should in this node at position i.
-                    node.keys.insert(i, key);
-                    node.values.insert(i, value);
-                    let result = match self.split_if_necessary(node, timing).await {
-                        Some((middle, middle_value, new_node)) => {
-                            AddResult::AddedToNodeAndSplit(middle, middle_value, new_node)
-                        }
-                        None => AddResult::AddedToNode,
-                    };
-                    return (result, depth);
-                }
-            }
-        }
-
-        // Is there another child?
-        let num_children = node.children.len();
-        if num_children > 0 {
-            // Yes, continue the search at child i
-            let child_id = node.children[num_children - 1];
-            let num_keys = node.keys.len();
-            //let node_lock = NodeLock::Node(node);
-
+        higher_locks: &'a mut Vec<NodeLock<'b, K, V>>,
+    ) -> Pin<Box<dyn Future<Output = (AddResult<K, V>, usize)> + Send + 'a>> {
+        Box::pin(async move {
             timing.get.start();
             self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
-            let child = self.store.get(child_id).await.unwrap();
+            let node = self.store.get(node_id).await.unwrap();
             self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
             timing.get.stop();
 
             timing.node_lock.start();
             self.add_node_lock_waiters_count
                 .fetch_add(1, Ordering::Relaxed);
-            let child = child.write().await;
+            let mut node = node.write().await;
             self.add_node_lock_waiters_count
                 .fetch_sub(1, Ordering::Relaxed);
             timing.node_lock.stop();
 
-            let node = if child.keys.len() < self.max_keys_per_node {
-                drop(node);
-                None
-            } else {
-                Some(node)
-            };
-
-            let (result, depth) = self
-                .add_recursive(child, key, value, timing, depth + 1)
-                .await;
-            let result = self.handle_add(result, num_keys, timing, node).await;
-            return (result, depth);
-        } else {
-            // No, so the key doesn't exist, but
-            // it should in this node at position i + 1
-            node.keys.push(key);
-            node.values.push(value);
-            let result = match self.split_if_necessary(node, timing).await {
-                Some((middle, middle_value, new_node)) => {
-                    AddResult::AddedToNodeAndSplit(middle, middle_value, new_node)
+            // Iterate through the keys
+            for (i, node_key) in node.keys.iter().enumerate() {
+                if key == *node_key {
+                    // The exact key exists, don't add it.
+                    return (AddResult::NotAdded, depth);
                 }
-                None => AddResult::AddedToNode,
-            };
-            return (result, depth);
-        }
+                if key < *node_key {
+                    // There is no key equal to the search key so it either
+                    // doesn't exist or exists in child i.
+
+                    // Does child i exist?
+                    if node.children.len() > i {
+                        // Yes, continue the search at child i.
+                        let child_id = node.children[i];
+                        // let node = if child.keys.len() < self.max_keys_per_node {
+                        //     drop(node);
+                        //     None
+                        // } else {
+                        //     Some(node)
+                        // };
+
+                        let pass_down = unsafe {
+                            // Safety: We are traversing down the tree to find the node to add
+                            // the key at. To do it safely we need to take a write lock at each
+                            // node. We keep the higher level locks held while we traverse down
+                            // because adding the key to a node at a lower level might cause that
+                            // node to split, which might cause the parent to split, and so on up
+                            // to the root. In general we need to keep all the locks we have taken
+                            // until the add operation and all the splits it causes have completed.
+                            // The exception to this is that if we discover a node has has space to
+                            // accommodate an extra key then we also know that node could satisfy
+                            // a split that propgates from nodes below, and prevent it propgating
+                            // up. Therefore locks taken above the satisfying node can be released
+                            // on the way down, making way early for other operations.
+                            //
+                            // The transmute is needed to decouple the lifetime of the lock at this
+                            // level from the lifetime of the held locks, which are the locks held
+                            // from nodes higher up. If we add this lock to the held locks then it
+                            // couples the lifetime of this lock to the held locks, which is not the
+                            // case. We are always popping this lock off the held locks before we
+                            // return, so the lifetime of this lock is always shorter than the held
+                            // locks. The transmute is needed to convince the compiler of this.
+                            std::mem::transmute(node)
+                        };
+
+                        higher_locks.push(NodeLock::from_node(pass_down));
+                        //let node_lock = NodeLock::Node(node);
+                        let (result, depth) = self
+                            .add_recursive(child_id, key, value, timing, depth + 1, higher_locks)
+                            .await;
+                        let node = higher_locks.pop().unwrap().into_node();
+                        let result = self.handle_add(result, i, timing, node).await;
+                        return (result, depth);
+                    } else {
+                        // No, so the key doesn't exist, but
+                        // it should in this node at position i.
+                        node.keys.insert(i, key);
+                        node.values.insert(i, value);
+                        let result = match self.split_if_necessary(node, timing).await {
+                            Some((middle, middle_value, new_node)) => {
+                                AddResult::AddedToNodeAndSplit(middle, middle_value, new_node)
+                            }
+                            None => AddResult::AddedToNode,
+                        };
+                        return (result, depth);
+                    }
+                }
+            }
+
+            // Is there another child?
+            let num_children = node.children.len();
+            if num_children > 0 {
+                // Yes, continue the search at child i
+                let child_id = node.children[num_children - 1];
+                let num_keys = node.keys.len();
+                //let node_lock = NodeLock::Node(node);
+
+                // timing.get.start();
+                // self.add_get_waiters_count.fetch_add(1, Ordering::Relaxed);
+                // let child = self.store.get(child_id).await.unwrap();
+                // self.add_get_waiters_count.fetch_sub(1, Ordering::Relaxed);
+                // timing.get.stop();
+
+                // timing.node_lock.start();
+                // self.add_node_lock_waiters_count
+                //     .fetch_add(1, Ordering::Relaxed);
+                // let child = child.write().await;
+                // self.add_node_lock_waiters_count
+                //     .fetch_sub(1, Ordering::Relaxed);
+                // timing.node_lock.stop();
+
+                // let node = if child.keys.len() < self.max_keys_per_node {
+                //     drop(node);
+                //     None
+                // } else {
+                //     Some(node)
+                // };
+                let pass_down = unsafe {
+                    // Safety: We are traversing down the tree to find the node to add
+                    // the key at. To do it safely we need to take a write lock at each
+                    // node. We keep the higher level locks held while we traverse down
+                    // because adding the key to a node at a lower level might cause that
+                    // node to split, which might cause the parent to split, and so on up
+                    // to the root. In general we need to keep all the locks we have taken
+                    // until the add operation and all the splits it causes have completed.
+                    // The exception to this is that if we discover a node has has space to
+                    // accommodate an extra key then we also know that node could satisfy
+                    // a split that propgates from nodes below, and prevent it propgating
+                    // up. Therefore locks taken above the satisfying node can be released
+                    // on the way down, making way early for other operations.
+                    //
+                    // The transmute is needed to decouple the lifetime of the lock at this
+                    // level from the lifetime of the held locks, which are the locks held
+                    // from nodes higher up. If we add this lock to the held locks then it
+                    // couples the lifetime of this lock to the held locks, which is not the
+                    // case. We are always popping this lock off the held locks before we
+                    // return, so the lifetime of this lock is always shorter than the held
+                    // locks. The transmute is needed to convince the compiler of this.
+                    std::mem::transmute(node)
+                };
+
+                higher_locks.push(NodeLock::from_node(pass_down));
+                let (result, depth) = self
+                    .add_recursive(child_id, key, value, timing, depth + 1, higher_locks)
+                    .await;
+                let node = higher_locks.pop().unwrap().into_node();
+                let result = self.handle_add(result, num_keys, timing, node).await;
+                (result, depth)
+            } else {
+                // No, so the key doesn't exist, but
+                // it should in this node at position i + 1
+                node.keys.push(key);
+                node.values.push(value);
+                let result = match self.split_if_necessary(node, timing).await {
+                    Some((middle, middle_value, new_node)) => {
+                        AddResult::AddedToNodeAndSplit(middle, middle_value, new_node)
+                    }
+                    None => AddResult::AddedToNode,
+                };
+                (result, depth)
+            }
+        })
     }
 
     async fn split_if_necessary(
@@ -482,7 +548,7 @@ where
         result: AddResult<K, V>,
         i: usize,
         timing: &mut Timing,
-        node: Option<RwLockWriteGuard<'_, BTreeNode<K, V>>>,
+        mut node: RwLockWriteGuard<'_, BTreeNode<K, V>>,
     ) -> AddResult<K, V> {
         match result {
             AddResult::NotAdded => AddResult::NotAdded,
@@ -493,7 +559,6 @@ where
                 AddResult::AddedToDescendant
             }
             AddResult::AddedToNodeAndSplit(middle, middle_value, new_node) => {
-                let mut node = node.unwrap();
                 node.keys.insert(i, middle);
                 node.values.insert(i, middle_value);
                 node.children.insert(i + 1, new_node);
@@ -615,7 +680,7 @@ mod tests {
     async fn add_and_validate<K, V, S>(tree: &mut BTree<K, V, S>, key_to_add: K, value_to_add: V)
     where
         K: PartialOrd + Clone + Debug + Display + Send + Sync,
-        V: PartialEq + Clone + Debug + Send + Sync,
+        V: PartialEq + Clone + Debug + Display + Send + Sync,
         S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
     {
         let keys_before = tree.list_keys().await;

@@ -10,7 +10,7 @@ use std::fmt::{Debug, Display};
 impl<K, V, S> BTree<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn list_keys(&self) -> Vec<K> {

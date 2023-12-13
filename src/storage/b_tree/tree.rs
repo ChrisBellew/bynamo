@@ -7,7 +7,7 @@ use prometheus::Registry;
 use std::{
     fmt::{Debug, Display},
     sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 pub struct BTree<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub root: Arc<RwLock<NodeId>>,
@@ -41,13 +41,14 @@ where
     pub add_persist_waiters_count: Arc<AtomicU32>,
     pub add_insert_waiters_count: Arc<AtomicU32>,
     pub add_workers_count: Arc<AtomicU32>,
+    pub add_bytes_count: Arc<AtomicU64>,
     //pub depth_gauge: IntGauge,
 }
 
 impl<K, V, S> BTree<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub async fn new(
@@ -71,6 +72,7 @@ where
         let add_persist_waiters_count = Arc::new(AtomicU32::new(0));
         let add_insert_waiters_count = Arc::new(AtomicU32::new(0));
         let add_workers_count = Arc::new(AtomicU32::new(0));
+        let add_bytes_count = Arc::new(AtomicU64::new(0));
         let next_node_id = Arc::new(AtomicU32::new(1));
 
         {
@@ -80,6 +82,7 @@ where
             let add_persist_waiters_count = add_persist_waiters_count.clone();
             let add_insert_waiters_count = add_insert_waiters_count.clone();
             let add_workers_count = add_workers_count.clone();
+            let add_bytes_count = add_bytes_count.clone();
             let next_node_id = next_node_id.clone();
             let metrics = metrics.clone();
 
@@ -161,6 +164,7 @@ where
             add_persist_waiters_count,
             add_insert_waiters_count,
             add_workers_count,
+            add_bytes_count,
         }
     }
     pub async fn add(&mut self, key: K, value: V) {

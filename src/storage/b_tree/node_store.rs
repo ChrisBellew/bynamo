@@ -30,7 +30,7 @@ use tokio::{
 pub enum NodeStore<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     Memory(MemoryNodeStore<K, V>),
@@ -40,7 +40,7 @@ where
 impl<K, V, S> NodeStore<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     pub fn new_memory() -> Self {
@@ -139,7 +139,7 @@ type GuardedNode<K, V> = RwLock<BTreeNode<K, V>>;
 pub struct MemoryNodeStore<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     nodes: Arc<DashMap<NodeId, Arc<GuardedNode<K, V>>>>,
 }
@@ -147,7 +147,7 @@ where
 impl<K, V> PartialEq for MemoryNodeStore<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     fn eq(&self, other: &Self) -> bool {
         let mut a: Vec<_> = self.nodes.iter().map(|node| *node.key()).collect();
@@ -161,7 +161,7 @@ where
 impl<K, V> MemoryNodeStore<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     fn new() -> Self {
         MemoryNodeStore {
@@ -225,7 +225,7 @@ pub static NODE_INSERT_MICROSECONDS_DURATION_TOTAL: AtomicUsize = AtomicUsize::n
 pub struct DiskNodeStore<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     reader: Arc<RwLock<File>>,
@@ -247,7 +247,7 @@ where
 impl<K, V, S> DiskNodeStore<K, V, S>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
     S: SerializeNode<K, V> + DeserializeNode<K, V> + Send + Sync + Clone,
 {
     async fn open(
@@ -638,7 +638,7 @@ pub fn calculate_max_keys_per_node(key_size: usize, value_size: usize) -> usize 
 pub trait SerializeNode<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     async fn serialize_key<W: AsyncWrite + Unpin + Send>(&self, node: &K, writer: &mut W) -> usize;
     async fn serialize_value<W: AsyncWrite + Unpin + Send>(
@@ -652,7 +652,7 @@ where
 pub trait DeserializeNode<K, V>
 where
     K: PartialOrd + Clone + Debug + Display + Send + Sync,
-    V: PartialEq + Clone + Debug + Send + Sync,
+    V: PartialEq + Clone + Debug + Display + Send + Sync,
 {
     async fn deserialize_key<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (K, usize);
     async fn deserialize_value<R: AsyncRead + Unpin + Send>(&self, reader: &mut R) -> (V, usize);
